@@ -88,11 +88,26 @@ namespace LanternExtractor.EQ.Wld.Fragments
             uint bytes = Reader.ReadUInt32();
             Reader.BaseStream.Position += 16;
 
-            // Get the mesh reference index and link to it
-            if (ContainsPolygons)
+            if (RegionType?.Name == "Z0000_ZONE")
             {
-                int meshReference = Reader.ReadInt32() - 1;
-                Mesh = fragments[meshReference] as Mesh;
+                var r = 123;
+            }
+            // Get the mesh reference index and link to it
+            if (true || ContainsPolygons)
+            {
+                try
+                {
+                    int meshReference = Reader.ReadInt32() - 1;
+                    if (meshReference < fragments.Count)
+                    {
+                        Mesh = fragments[meshReference] as Mesh;
+                    }
+                }
+                catch (System.Exception e)
+                {
+                }
+
+
             }
         }
 

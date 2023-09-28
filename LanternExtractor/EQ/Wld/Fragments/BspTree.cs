@@ -9,7 +9,7 @@ namespace LanternExtractor.EQ.Wld.Fragments
     /// Internal Name: None
     /// Binary tree with each leaf node containing a BspRegion fragment.
     /// </summary>
-    class BspTree : WldFragment
+    public class BspTree : WldFragment
     {
         /// <summary>
         /// The BSP nodes contained within the tree
@@ -35,7 +35,7 @@ namespace LanternExtractor.EQ.Wld.Fragments
                     SplitDistance = Reader.ReadSingle(),
                     RegionId = Reader.ReadInt32(),
                     LeftNode = Reader.ReadInt32() - 1,
-                    RightNode = Reader.ReadInt32() - 1
+                    RightNode = Reader.ReadInt32() - 1,
                 });
             }
         }

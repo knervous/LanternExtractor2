@@ -3,11 +3,11 @@
 # EverQuest Installation Path
 # Window example: C:/EverQuest
 # MacOS example: /Users/your.name/EQ/
-EverQuestDirectory = C:/Program Files (x86)/EverQuest/
+EverQuestDirectory = F:\EQ\P2002_Titan
 
 # Server Database Path (optional)
 # This can be found in your LanternEQ install (NOT the extractor) -
-ServerDatabasePath = C:/Lantern/LanternEQ_Data/StreamingAssets/Database/lantern_server.db
+ServerDatabasePath = F:\Lantern-0.1.6\LanternEQ_Data\StreamingAssets\Database\lantern_server.db
 
 # Extract the contents of the S3D archive as is?
 # If true, this will export all contents as they exist in the archives to their original formats.
@@ -23,8 +23,9 @@ ModelExportFormat = 2
 # If enabled, each region mesh is exported.
 # If disabled, the mesh is combined into a single mesh.
 # Unity importer only supports single mesh zone.
-# (Intermediate, OBJ)
-ExportZoneMeshGroups = false
+# glTF will export empty meshes with metadata of the region information
+# (Intermediate, OBJ, glTF)
+ExportZoneMeshGroups = true
 
 # Include hidden geometry (invisible boundaries) in the zone collision export?
 # (Intermediate, OBJ)
@@ -33,7 +34,7 @@ ExportHiddenGeometry = false
 # If true, will export all characters to the 'characters' folder
 # This is useful when batch importing into Unity
 # (Intermediate)
-ExportCharacterToSingleFolder = false
+ExportCharacterToSingleFolder = true
 
 # If true, will export all equipment to the 'equipment' folder
 # This is useful when batch importing into Unity
@@ -48,7 +49,7 @@ ExportSoundsToSingleFolder = true
 # This could use a high amount of disk space.
 # If true and using glTF export format, skeletal models will export with animations.
 # (OBJ, glTF)
-ExportAllAnimationFrames = false
+ExportAllAnimationFrames = true
 
 # If true, will export zone files with their associated objects placed within the zone
 # (OBJ, glTF)
@@ -75,7 +76,7 @@ ExportZoneCharacterVariations = false
 # value 54.35 roughly translates EQ's radius values to Blender's Power (watts).
 # 1.0 seems to work well for others.
 # (glTF)
-LightIntensityMultiplier = 0.0
+LightIntensityMultiplier = 0
 
 # !!EXPIRIMENTAL!! Export zone objects with skeletal animations
 # If ExportZoneWithObjects is true and this is also true, objects with
@@ -100,7 +101,7 @@ ExportGltfVertexColors = false
 # into one file. This will take up more space since textures can't be shared, and the export
 # process will likely take longer to complete. However, using GLB will make models more portable.
 # (glTF)
-ExportGltfInGlbFormat = false
+ExportGltfInGlbFormat = true
 
 # Separate two-faced triangles
 # Some meshes have a pattern where three vertices are shared by two triangles with different
@@ -109,7 +110,7 @@ ExportGltfInGlbFormat = false
 # only have one face. If this option is turned on, a second set of vertices will be created
 # for any triangles found sharing vertices with another.
 # (glTF)
-SeparateTwoFacedTriangles = false
+SeparateTwoFacedTriangles = true
 
 # Exported animation types
 # Animations are prefixed with a single letter to designate what type they are:

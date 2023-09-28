@@ -321,7 +321,7 @@ namespace LanternExtractor.EQ.Wld.Exporters
                         float z = (float)(Azx * px + Azy * py + Azz * pz);
                         vertex = new vec3(x, y, z);
                     }
-                    vertexOutput.AppendLine("v " + (-(vertex.x + mesh.Center.x + offset.x)).ToString(_numberFormat) + " " +
+                    vertexOutput.AppendLine("v " + ((vertex.x + mesh.Center.x + offset.x)).ToString(_numberFormat) + " " +
                                             (vertex.z + mesh.Center.z + offset.z).ToString(_numberFormat) + " " +
                                             (vertex.y + mesh.Center.y + offset.y).ToString(_numberFormat));
 
