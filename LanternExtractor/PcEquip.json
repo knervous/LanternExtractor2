@@ -1,0 +1,51 @@
+{
+      "Face": 0,
+      "RaceGender": "HUF",
+      "Primary ID": "",
+      "Primary Name":  "",
+      "Secondary ID": "",
+      "Secondary Name":  "",
+      "Head":
+      {
+          "Name": "",
+          "Material": 0,
+          "Color": null,
+          "Velious": false
+      },
+      "Wrist":
+      {
+          "Name": "",
+          "Material": 0,
+          "Color": null
+      },
+      "Arms":
+      {
+          "Name": "",
+          "Material": 0,
+          "Color": null
+      },
+      "Hands":
+      {
+          "Name": "",
+          "Material": 0,
+          "Color": null
+      },
+      "Chest":
+      {
+          "Name": "",
+          "Material": 0,
+          "Color": null
+      },
+      "Legs":
+      {
+          "Name": "",
+          "Material": 0,
+          "Color": null
+      },
+      "Feet":
+      {
+          "Name": "",
+          "Material": 0,
+          "Color": null
+      }
+}

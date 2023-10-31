@@ -28,19 +28,25 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="EalTools" Version="0.1.1" />
+    <PackageReference Include="DotNetZip">
+      <Version>1.10.1</Version>
+    </PackageReference>
+    <PackageReference Include="EntityFramework" Version="6.4.4" />
     <PackageReference Include="GlmSharp">
       <Version>0.9.8</Version>
     </PackageReference>
     <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="7.0.11" />
     <PackageReference Include="Pfim">
       <Version>0.10.0</Version>
     </PackageReference>
     <PackageReference Include="SharpGLTF.Toolkit">
-      <Version>1.0.0-alpha0025</Version>
+      <Version>1.0.0-alpha0029</Version>
     </PackageReference>
     <PackageReference Include="System.ComponentModel.Composition" Version="6.0.0" />
     <PackageReference Include="System.Data.DataSetExtensions" Version="4.5.0" />
     <PackageReference Include="DotNetZip" Version="1.16.0" />
+    <PackageReference Include="System.Data.SQLite.Core" Version="1.0.118" />
     <PackageReference Include="System.Drawing.Common" Version="6.0.0" />
   </ItemGroup>
 </Project>

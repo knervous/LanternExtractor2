@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using LanternExtractor.EQ.Pfs;
+using LanternExtractor.EQ.Wld.DataTypes;
 using LanternExtractor.EQ.Wld.Fragments;
 using LanternExtractor.EQ.Wld.Helpers;
 using LanternExtractor.Infrastructure;
@@ -14,9 +16,37 @@ namespace LanternExtractor.EQ.Wld
         public Dictionary<string, string> AnimationSources = new Dictionary<string, string>();
         
         public WldFileCharacters(PfsFile wldFile, string zoneName, WldType type, ILogger logger, Settings settings,
-            WldFile wldToInject = null) : base(wldFile, zoneName, type, logger, settings, wldToInject)
+            List<WldFile> wldFilesToInject = null) : base(wldFile, zoneName, type, logger, settings, wldFilesToInject)
         {
             ParseAnimationSources();
+        }
+
+        public void AddAdditionalAnimationsToSkeleton(SkeletonHierarchy skeleton, bool overwriteExisting = false)
+        {
+            if (!AnimationSources.TryGetValue(skeleton.ModelBase, out var alternateSkeletonModel)) return;
+
+            var alternateSkeleton = GetFragmentsOfType<SkeletonHierarchy>()
+                .Where(s => s.ModelBase == alternateSkeletonModel).SingleOrDefault();
+
+            if (alternateSkeleton == null) return;
+
+            foreach (var animationKey in alternateSkeleton.Animations.Keys)
+            {
+                if (!overwriteExisting && skeleton.Animations.ContainsKey(animationKey)) continue;
+
+                // Want the same animation data except for the AnimModelBase name to be
+                // that of the base skeleton. Renaming the existing animation without
+                // making a new instance might cause problems if it's referenced later
+                skeleton.Animations[animationKey] = new Animation()
+                {
+                    AnimModelBase = skeleton.ModelBase,
+                    Tracks = alternateSkeleton.Animations[animationKey].Tracks,
+                    TracksCleaned = alternateSkeleton.Animations[animationKey].TracksCleaned,
+                    TracksCleanedStripped = alternateSkeleton.Animations[animationKey].TracksCleanedStripped,
+                    AnimationTimeMs = alternateSkeleton.Animations[animationKey].AnimationTimeMs,
+                    FrameCount = alternateSkeleton.Animations[animationKey].FrameCount
+                };
+            }
         }
 
         private void ParseAnimationSources()
@@ -83,17 +113,22 @@ namespace LanternExtractor.EQ.Wld
             foreach (var list in materialLists)
             {
                 string materialListModelName = FragmentNameCleaner.CleanName(list);
+                var materialListContainsRobe = list.Materials.Where(
+                    m => m.Name.StartsWith("clk", StringComparison.InvariantCultureIgnoreCase))
+                    .Any();
 
-                foreach (var material in GetFragmentsOfType<Material>())
+                foreach (var material in GetFragmentsOfTypeIncludingInjectedWlds<Material>())
                 {
-                    if (material.IsHandled)
+                    string materialName = FragmentNameCleaner.CleanName(material);
+                    var materialIsRobe = materialName.StartsWith("clk", StringComparison.InvariantCultureIgnoreCase);
+                    
+                    if (material.IsHandled && !materialIsRobe)
                     {
                         continue;
                     }
 
-                    string materialName = FragmentNameCleaner.CleanName(material);
-
-                    if (materialName.StartsWith(materialListModelName))
+                    if ((materialListContainsRobe && materialIsRobe)
+                        || materialName.StartsWith(materialListModelName))
                     {
                         list.AddVariant(material, _logger);
                     }
@@ -122,18 +157,31 @@ namespace LanternExtractor.EQ.Wld
 
             if (skeletons.Count == 0)
             {
-                if (_wldToInject == null)
+                if (_wldFilesToInject == null)
                 {
                     return;
                 }
                 
-                skeletons = _wldToInject.GetFragmentsOfType<SkeletonHierarchy>();
+                foreach (var wldFile in _wldFilesToInject)
+                {
+                    skeletons.AddRange(wldFile.GetFragmentsOfType<SkeletonHierarchy>());
+                }
             }
             
             if (skeletons.Count == 0)
             {
                 return;
             }
+
+            var allTracks = GetFragmentsOfType<TrackFragment>();
+
+            _wldFilesToInject?.ForEach(w =>
+                allTracks.AddRange(w?.GetFragmentsOfType<TrackFragment>() 
+                ?? Enumerable.Empty<TrackFragment>()));
+
+            allTracks.Where(t => !t.IsPoseAnimation && !t.IsNameParsed)
+                .ToList()
+                .ForEach(t => t.ParseTrackData(_logger));
 
             foreach (var skeletonFragment in skeletons)
             {
@@ -146,29 +194,12 @@ namespace LanternExtractor.EQ.Wld
 
                 string modelBase = skeleton.ModelBase;
                 string alternateModel = GetAnimationModelLink(modelBase);
-                
+
                 // TODO: Alternate model bases
-                foreach (var track in GetFragmentsOfType<TrackFragment>())
-                {
-                    if (track.IsPoseAnimation)
-                    {
-                        continue;
-                    }
-
-                    if (!track.IsNameParsed)
-                    {
-                        track.ParseTrackData(_logger);
-                    }
-                    
-                    string trackModelBase = track.ModelName;
-                    
-                    if (trackModelBase != modelBase && alternateModel != trackModelBase)
-                    {
-                        continue;
-                    }
-
-                    skeleton.AddTrackData(track);
-                }
+                allTracks
+                    .Where(t => t.ModelName == modelBase || t.ModelName == alternateModel)
+                    .ToList()
+                    .ForEach(t => skeleton.AddTrackData(t));
                 
                 // TODO: Split to another function
                 if(GetFragmentsOfType<Mesh>().Count != 0)

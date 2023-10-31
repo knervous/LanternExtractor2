@@ -8,7 +8,6 @@ using LanternExtractor.EQ.Wld.Exporters;
 using LanternExtractor.EQ.Wld.Fragments;
 using LanternExtractor.EQ.Wld.Helpers;
 using LanternExtractor.Infrastructure.Logger;
-using LanternExtractor.EQ;
 
 namespace LanternExtractor.EQ.Wld
 {
@@ -20,8 +19,13 @@ namespace LanternExtractor.EQ.Wld
         public string RootExportFolder;
         public string ZoneShortname => _zoneName;
 
-
+        public PfsArchive S3dArchiveReference { get; set; }
         public WldType WldType => _wldType;
+
+        /// <summary>
+        /// The link between fragment types and fragment classes
+        /// </summary>
+        // private Dictionary<int, Func<WldFragment>> _fragmentBuilder;
 
         /// <summary>
         /// A link of indices to fragments
@@ -76,8 +80,12 @@ namespace LanternExtractor.EQ.Wld
         /// </summary>
         private bool _isNewWldFormat;
 
-        protected readonly WldFile _wldToInject;
+        /// <summary>
+        /// Initialized flag so we do not initialize more than once
+        /// </summary>
+        private bool _isInitialized;
 
+        protected readonly List<WldFile> _wldFilesToInject;
 
         public Dictionary<string, string> FilenameChanges = new Dictionary<string, string>();
 
@@ -90,13 +98,25 @@ namespace LanternExtractor.EQ.Wld
         /// <param name="logger">The logger used for debug output</param>
         protected WldFile(PfsFile wldFile, string zoneName, WldType type, ILogger logger, Settings settings,
             WldFile fileToInject)
+            : this(wldFile, zoneName, type, logger, settings, 
+                  fileToInject != null ? new List<WldFile>() { fileToInject } : null) { }
+
+        /// <summary>
+        /// Constructor setting data references used during the initialization process
+        /// </summary>
+        /// <param name="wldFile">The WLD file bytes contained in the PFS file</param>
+        /// <param name="zoneName">The shortname of the zone</param>
+        /// <param name="type">The type of WLD - used to determine what to extract</param>
+        /// <param name="logger">The logger used for debug output</param>
+        protected WldFile(PfsFile wldFile, string zoneName, WldType type, ILogger logger, Settings settings,
+            List<WldFile> wldFilesToInject)
         {
             _wldFile = wldFile;
             _zoneName = zoneName.ToLower();
             _wldType = type;
             _logger = logger;
             _settings = settings;
-            _wldToInject = fileToInject;
+            _wldFilesToInject = wldFilesToInject;
         }
 
         /// <summary>
@@ -104,6 +124,15 @@ namespace LanternExtractor.EQ.Wld
         /// </summary>
         public virtual bool Initialize(string rootFolder, bool exportData = true)
         {
+            if (_isInitialized)
+            {
+                if (exportData)
+                {
+                    ExportData();
+                }
+                return true;
+            }
+
             RootExportFolder = rootFolder;
             _logger.LogInfo("Extracting WLD archive: " + _wldFile.Name);
             _logger.LogInfo("-----------------------------------");
@@ -198,6 +227,7 @@ namespace LanternExtractor.EQ.Wld
                 ExportData();
             }
 
+            _isInitialized = true;
             return true;
         }
 
@@ -211,6 +241,19 @@ namespace LanternExtractor.EQ.Wld
             return _fragmentTypeDictionary[typeof(T)].Cast<T>().ToList();
         }
 
+        public List<T> GetFragmentsOfTypeIncludingInjectedWlds<T>() where T : WldFragment
+        {
+            if (_wldFilesToInject == null || !_wldFilesToInject.Any())
+            {
+                return GetFragmentsOfType<T>();
+            }
+            var wldFileList = new List<WldFile>() { this };
+            wldFileList.AddRange(_wldFilesToInject);
+            var wldFragments = new List<T>();
+            wldFileList.ForEach(w => wldFragments.AddRange(w.GetFragmentsOfType<T>()));
+            return wldFragments;
+        }
+
         public T GetFragmentByName<T>(string fragmentName) where T : WldFragment
         {
             if (!_fragmentNameDictionary.ContainsKey(fragmentName))
@@ -219,6 +262,25 @@ namespace LanternExtractor.EQ.Wld
             }
 
             return _fragmentNameDictionary[fragmentName] as T;
+        }
+
+        public T GetFragmentByNameIncludingInjectedWlds<T>(string fragmentName) where T : WldFragment
+        {
+            if (_wldFilesToInject == null)
+            {
+                return GetFragmentByName<T>(fragmentName);
+            }
+            var wldFileList = new List<WldFile>() { this };
+            wldFileList.AddRange(_wldFilesToInject);
+            foreach(var wldFile in wldFileList)
+            {
+                var fragment = wldFile.GetFragmentByName<T>(fragmentName);
+                if (fragment != null)
+                {
+                    return fragment;
+                }
+            }
+            return default(T);
         }
 
         protected virtual void ProcessData()
@@ -261,9 +323,9 @@ namespace LanternExtractor.EQ.Wld
         /// Used in exporting the bitmaps from the PFS archive
         /// </summary>
         /// <returns>Dictionary with material to shader mapping</returns>
-        public List<string> GetMaskedBitmaps()
+        public List<string> GetMaskedBitmaps(ICollection<string> includeList = null, bool includeInjectedWlds = false)
         {
-            var materialLists = GetFragmentsOfType<MaterialList>();
+            var materialLists = includeInjectedWlds ? GetFragmentsOfTypeIncludingInjectedWlds<MaterialList>() : GetFragmentsOfType<MaterialList>();
 
             if (materialLists.Count == 0)
             {
@@ -272,6 +334,7 @@ namespace LanternExtractor.EQ.Wld
             }
 
             List<string> maskedTextures = new List<string>();
+            if (includeList != null && !includeList.Any()) return maskedTextures;
 
             foreach (var list in materialLists)
             {
@@ -298,7 +361,10 @@ namespace LanternExtractor.EQ.Wld
                     }
                 }
             }
-
+            if (includeList != null)
+            {
+                return maskedTextures.Where(t => includeList.Contains(t)).ToList();
+            }
             return maskedTextures;
         }
 
@@ -347,6 +413,72 @@ namespace LanternExtractor.EQ.Wld
             }
         }
 
+        public ICollection<string> GetActorImageNames(string actorName)
+        {
+            var imageNames = new HashSet<string>();
+            SkeletonHierarchy skeleton = null;
+            var materialLists = new List<MaterialList>();
+            // HACK: IT145 (SK epic) actor not found
+            if (string.Equals(actorName, "it145", StringComparison.InvariantCultureIgnoreCase))
+            {
+                skeleton = GetFragmentByNameIncludingInjectedWlds<SkeletonHierarchy>("IT145_HS_DEF");
+            }
+            else
+            {
+                if (!actorName.EndsWith("_ACTORDEF"))
+                {
+                    actorName += "_ACTORDEF";
+                }
+                var actor = GetFragmentByNameIncludingInjectedWlds<Actor>(actorName);
+
+                if (actor == null)
+                {
+                    return imageNames;
+                }
+
+                if (actor.MeshReference?.Mesh != null)
+                {
+                    materialLists.Add(actor.MeshReference.Mesh.MaterialList);
+                }
+                skeleton = actor.SkeletonReference?.SkeletonHierarchy;
+            }
+
+            if (skeleton != null)
+            {
+                foreach (var mesh in skeleton.Meshes ?? Enumerable.Empty<Mesh>())
+                {
+                    materialLists.Add(mesh.MaterialList);
+                }
+
+                foreach (var mesh in skeleton.SecondaryMeshes ?? Enumerable.Empty<Mesh>())
+                {
+                    materialLists.Add(mesh.MaterialList);
+                }
+
+                foreach (var bone in skeleton.Skeleton)
+                {
+                    var boneMaterialList = bone.MeshReference?.Mesh?.MaterialList;
+                    if (boneMaterialList != null)
+                    {
+                        materialLists.Add(boneMaterialList);
+                    }
+                }
+            }
+            
+            foreach (var materialList in materialLists)
+            {
+                materialList.Materials.ForEach(
+                    m => m.GetAllBitmapNames(true).ForEach(
+                        b => imageNames.Add(b)));
+                
+                var additionalMaterials = materialList?.AdditionalMaterials ?? Enumerable.Empty<Material>();
+                additionalMaterials.ToList().ForEach(
+                    m => m.GetAllBitmapNames(true).ForEach(
+                        b => imageNames.Add(b)));
+            }
+
+            return imageNames;
+        }
         protected string GetRootExportFolder()
         {
             switch (_wldType)
@@ -357,6 +489,9 @@ namespace LanternExtractor.EQ.Wld
                 case WldType.Characters when (_settings.ExportCharactersToSingleFolder &&
                         _settings.ModelExportFormat == ModelExportFormat.Intermediate):
                     return RootExportFolder + "characters/";
+                case WldType.Equipment when _settings.ModelExportFormat == ModelExportFormat.GlTF &&
+                        _zoneName == "gequip2":
+                    return RootExportFolder + "gequip2" + "/";
                 default:
                     return RootExportFolder + ShortnameHelper.GetCorrectZoneShortname(_zoneName) + "/";
             }
@@ -366,11 +501,11 @@ namespace LanternExtractor.EQ.Wld
         {
             var actors = GetFragmentsOfType<Actor>();
 
-            if (_wldToInject != null)
+            if (_wldFilesToInject != null)
             {
-                actors.AddRange(_wldToInject.GetFragmentsOfType<Actor>());
-            }
-
+				_wldFilesToInject.ForEach(w => actors.AddRange(w.GetFragmentsOfType<Actor>()));
+			}
+            
             if (actors.Count == 0)
             {
                 return;
@@ -418,15 +553,15 @@ namespace LanternExtractor.EQ.Wld
 
             if (skeletons.Count == 0)
             {
-                if (_wldToInject == null)
+                if (_wldFilesToInject == null)
                 {
                     _logger.LogWarning("Cannot export animations. No model references.");
                     return;
                 }
 
-                skeletons = _wldToInject.GetFragmentsOfType<SkeletonHierarchy>();
+                _wldFilesToInject.ForEach(w => skeletons.AddRange(w?.GetFragmentsOfType<SkeletonHierarchy>() ?? Enumerable.Empty<SkeletonHierarchy>()));
 
-                if (skeletons == null)
+                if (!skeletons.Any())
                 {
                     _logger.LogWarning("Cannot export animations. No model references.");
                     return;
@@ -470,7 +605,6 @@ namespace LanternExtractor.EQ.Wld
                     skeletonWriter.ClearExportData();
                 }
 
-
                 foreach (var animation in skeleton.Animations)
                 {
                     var modelBase = string.IsNullOrEmpty(animation.Value.AnimModelBase)
@@ -485,16 +619,27 @@ namespace LanternExtractor.EQ.Wld
             }
         }
 
-        public List<string> GetAllBitmapNames()
+        public List<string> GetAllBitmapNames(ICollection<string> includeList = null, bool includeInjectedWlds = false)
         {
-            List<string> bitmaps = new List<string>();
-            var bitmapFragments = GetFragmentsOfType<BitmapName>();
+            var bitmaps = new List<string>();
+            if (includeList != null && !includeList.Any()) return bitmaps;
+
+            var bitmapFragments = includeInjectedWlds ? GetFragmentsOfTypeIncludingInjectedWlds<BitmapName>() : GetFragmentsOfType<BitmapName>();
             foreach (var fragment in bitmapFragments)
             {
                 bitmaps.Add(fragment.Filename);
             }
 
+            if (includeList != null)
+            {
+                return bitmaps.Where(b => includeList.Contains(b)).ToList();
+            }
             return bitmaps;
+        }
+
+        public List<PfsArchive> GetInjectedWldsAssociatedS3dArchives()
+        {
+            return _wldFilesToInject?.Select(w => w.S3dArchiveReference).ToList() ?? Enumerable.Empty<PfsArchive>().ToList();
         }
 
         private void BuildSkeletonData()
@@ -506,7 +651,10 @@ namespace LanternExtractor.EQ.Wld
                 skeleton.BuildSkeletonData(_wldType == WldType.Characters || _settings.ModelExportFormat == ModelExportFormat.Intermediate);
             }
 
-            (_wldToInject as WldFileCharacters)?.BuildSkeletonData();
+            if (_wldFilesToInject != null)
+            {
+				_wldFilesToInject.ForEach(w => (w as WldFileCharacters)?.BuildSkeletonData());
+			}    
         }
     }
 }

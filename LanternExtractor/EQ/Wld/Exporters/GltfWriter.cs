@@ -12,11 +12,15 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 using WldColor = LanternExtractor.EQ.Wld.DataTypes.Color;
 using Animation = LanternExtractor.EQ.Wld.DataTypes.Animation;
 using System.Drawing.Imaging;
 using LanternExtractor.Infrastructure.Logger;
+using LanternExtractor.Infrastructure;
+using SharpGLTF.Transforms;
 
 namespace LanternExtractor.EQ.Wld.Exporters
 {
@@ -52,8 +56,8 @@ namespace LanternExtractor.EQ.Wld.Exporters
         private readonly GltfExportFormat _exportFormat = GltfExportFormat.GlTF;
         private readonly ILogger _logger;
 
+        #region Constants
         private static readonly float MaterialRoughness = 0.9f;
-        private static readonly Vector4 DefaultVertexColor = new Vector4(0f, 0f, 0f, 1f); // Black
         private static readonly string MaterialInvisName = "Invis";
         private static readonly string MaterialBlankName = "Blank";
         private static readonly string DefaultModelPoseAnimationKey = "pos";
@@ -68,6 +72,12 @@ namespace LanternExtractor.EQ.Wld.Exporters
                 ShaderType.TransparentAdditiveUnlitSkydome,
                 ShaderType.TransparentSkydome
             };
+        private static readonly ISet<string> ImagesInZoneFoundInObj = new HashSet<string>()
+        {
+            "canwall",
+            "maywall",
+            "kruphse3"
+        };
         private static readonly ISet<string> LoopedAnimationKeys = new HashSet<string>()
         {
              "pos", // name is used for animated objects
@@ -85,16 +95,135 @@ namespace LanternExtractor.EQ.Wld.Exporters
              "sky"
         };
 
-        private static readonly Matrix4x4 MirrorXAxisMatrix = Matrix4x4.CreateReflection(new Plane(1, 0, 0, 0));
-        private static readonly Matrix4x4 CorrectedWorldMatrix = MirrorXAxisMatrix * Matrix4x4.CreateScale(0.1f);
-        
+        private static readonly IDictionary<string, string> AnimationDescriptions = new Dictionary<string, string>()
+        {
+            {"c01", "Combat Kick"},
+            {"c02", "Combat Piercing"},
+            {"c03", "Combat 2H Slash"},
+            {"c04", "Combat 2H Blunt"},
+            {"c05", "Combat Throwing"},
+            {"c06", "Combat 1H Slash Left"},
+            {"c07", "Combat Bash"},
+            {"c08", "Combat Hand to Hand"},
+            {"c09", "Combat Archery"},
+            {"c10", "Combat Swim Attack"},
+            {"c11", "Combat Round Kick"},
+            {"d01", "Damage 1"},
+            {"d02", "Damage 2"},
+            {"d03", "Damage from Trap"},
+            {"d04", "Drowning_Burning"},
+            {"d05", "Dying"},
+            {"l01", "Walk"},
+            {"l02", "Run"},
+            {"l03", "Jump (Running)"},
+            {"l04", "Jump (Standing)"},
+            {"l05", "Falling"},
+            {"l06", "Crouch Walk"},
+            {"l07", "Climbing"},
+            {"l08", "Crouching"},
+            {"l09", "Swim Treading"},
+            {"o01", "Idle"},
+            {"s01", "Cheer"},
+            {"s02", "Mourn"},
+            {"s03", "Wave"},
+            {"s04", "Rude"},
+            {"s05", "Yawn"},
+            {"p01", "Stand"},
+            {"p02", "Sit_Stand"},
+            {"p03", "Shuffle Feet"},
+            {"p04", "Float_Walk_Strafe"},
+            {"p05", "Kneel"},
+            {"p06", "Swim"},
+            {"p07", "Sitting"},
+            {"t01", "UNUSED????"},
+            {"t02", "Stringed Instrument"},
+            {"t03", "Wind Instrument"},
+            {"t04", "Cast Pull Back"},
+            {"t05", "Raise and Loop Arms"},
+            {"t06", "Cast Push Forward"},
+            {"t07", "Flying Kick"},
+            {"t08", "Rapid Punches"},
+            {"t09", "Large Punch"},
+            {"s06", "Nod"},
+            {"s07", "Amazed"},
+            {"s08", "Plead"},
+            {"s09", "Clap"},
+            {"s10", "Distress"},
+            {"s11", "Blush"},
+            {"s12", "Chuckle"},
+            {"s13", "Burp"},
+            {"s14", "Duck"},
+            {"s15", "Look Around"},
+            {"s16", "Dance"},
+            {"s17", "Blink"},
+            {"s18", "Glare"},
+            {"s19", "Drool"},
+            {"s20", "Kneel"},
+            {"s21", "Laugh"},
+            {"s22", "Point"},
+            {"s23", "Ponder"},
+            {"s24", "Ready"},
+            {"s25", "Salute"},
+            {"s26", "Shiver"},
+            {"s27", "Tap Foot"},
+            {"s28", "Bow"},
+            {"p08", "Stand (Arms at Sides)"},
+            {"o02", "Idle (Arms at Sides)"},
+            {"o03", "Idle (Sitting)"},
+            {"pos", "Default"},
+            {"drf", "Pose"}
+        };
+        private static readonly IDictionary<string, int> AnimatedDoorObjectOpenTypes = new Dictionary<string, int>()
+        {
+            {"akalight4gem", 100},
+            {"gmspin", 100},
+            {"moltglob100", 100},
+            {"mooglob100", 100},
+            {"nerjewel", 100},
+            {"norglob100", 100},
+            {"qeylamp", 100},
+            {"sblight101", 100},
+            {"shaft", 100},
+            {"slff200", 100},
+            {"airwmbld", 105},
+            {"airwmblds", 105},
+            {"akawheel", 105},
+            {"wmblade", 105}
+        };
+
+        private static readonly ISet<string> AnimatedMeshesSharpGltfWillNotExportMorphTargets = new HashSet<string>()
+        {
+            "cmplant101",
+            "cmplant102",
+            "drgrass101",
+            "drgrass102",
+            "jnplant101",
+            "otplant101",
+            "otplant101b",
+            "otplant101c",
+            "otplant102",
+            "otplant102b",
+            "otplant102c",
+            "otplant103",
+            "otplant103b",
+            "otplant103c"
+        };
+        private static readonly float ZoneScaleMultiplier = 1.0f;
+        public static readonly Matrix4x4 MirrorXAxis = Matrix4x4.CreateReflection(new Plane(1, 0, 0, 0));
+        private static readonly Matrix4x4 MirrorXAxisMatrix = Matrix4x4.Identity;
+        private static readonly Matrix4x4 CorrectedWorldMatrix = MirrorXAxisMatrix * Matrix4x4.CreateScale(ZoneScaleMultiplier);
+        private static readonly Matrix4x4 CorrectedSingularActorMatrix = Matrix4x4.CreateReflection(new Plane(0, 0, 1, 0));
+        #endregion
+
         private SceneBuilder _scene;
         private IMeshBuilder<MaterialBuilder> _combinedMeshBuilder;
         private ISet<string> _meshMaterialsToSkip;
         private IDictionary<string, IMeshBuilder<MaterialBuilder>> _sharedMeshes;
         private IDictionary<string, List<NodeBuilder>> _skeletons;
+        private IDictionary<string, List<(string, string)>> _skeletonChildrenAttachBones;
+        private bool _separateTwoFacedTriangles;
 
-        public GltfWriter(bool exportVertexColors, GltfExportFormat exportFormat, ILogger logger)
+        public GltfWriter(bool exportVertexColors, GltfExportFormat exportFormat, ILogger logger, bool separateTwoFacedTriangles = false)
         {
             _exportVertexColors = exportVertexColors;
             _exportFormat = exportFormat;
@@ -103,31 +232,43 @@ namespace LanternExtractor.EQ.Wld.Exporters
             Materials = new Dictionary<string, MaterialBuilder>();
             _meshMaterialsToSkip = new HashSet<string>();
             _skeletons = new Dictionary<string, List<NodeBuilder>>();
+            _skeletonChildrenAttachBones = new Dictionary<string, List<(string, string)>>();
             _sharedMeshes = new Dictionary<string, IMeshBuilder<MaterialBuilder>>();
+            _separateTwoFacedTriangles = separateTwoFacedTriangles;
             _scene = new SceneBuilder();
         }
 
         public override void AddFragmentData(WldFragment fragment)
         {
             AddFragmentData(
-                mesh:(Mesh)fragment, 
-                generationMode:ModelGenerationMode.Separate );
+                mesh: (Mesh)fragment,
+                generationMode: ModelGenerationMode.Separate);
         }
 
-        public void AddFragmentData(Mesh mesh, SkeletonHierarchy skeleton,
-            string meshNameOverride = null, int singularBoneIndex = -1)
+        public void AddFragmentData(Mesh mesh, SkeletonHierarchy skeleton, int singularBoneIndex = -1,
+            ICharacterModel characterModel = null, string parentSkeletonName = null, string parentSkeletonAttachBoneName = null,
+            string meshNameOverride = null, bool usesMobPieces = false, Action<string> addToAnimatedNames = null,
+            int materialVariation = -1, ModelGenerationMode generationMode = ModelGenerationMode.Combine, bool secondaryMesh = false,
+            int robeIndex = -1
+        )
         {
             if (!_skeletons.ContainsKey(skeleton.ModelBase))
             {
-                AddNewSkeleton(skeleton);
+                AddNewSkeleton(skeleton, parentSkeletonName, parentSkeletonAttachBoneName);
             }
 
             AddFragmentData(
-                mesh: mesh, 
-                generationMode: ModelGenerationMode.Combine, 
-                isSkinned: true, 
-                meshNameOverride: meshNameOverride, 
-                singularBoneIndex: singularBoneIndex);
+                mesh: mesh,
+                generationMode: generationMode,
+                isSkinned: true,
+                meshNameOverride: meshNameOverride,
+                singularBoneIndex: singularBoneIndex,
+                usesMobPieces: usesMobPieces,
+                characterModel: characterModel,
+                addToAnimatedNames: addToAnimatedNames,
+                secondaryMesh: secondaryMesh,
+                robeIndex: robeIndex,
+                materialVariation: materialVariation);
         }
 
         public void CopyMaterialList(GltfWriter gltfWriter)
@@ -135,7 +276,7 @@ namespace LanternExtractor.EQ.Wld.Exporters
             Materials = gltfWriter.Materials;
         }
 
-        public void GenerateGltfMaterials(IEnumerable<MaterialList> materialLists, string textureImageFolder)
+        public void GenerateGltfMaterials(IEnumerable<MaterialList> materialLists, string textureImageFolder, bool loadVariants = false)
         {
             if (!Materials.Any())
             {
@@ -148,101 +289,201 @@ namespace LanternExtractor.EQ.Wld.Exporters
 
                 foreach (var eqMaterial in materialList.Materials)
                 {
-                    var materialName = GetMaterialName(eqMaterial);
-
-                    if (Materials.ContainsKey(materialName)) continue;
-
-                    if (eqMaterial.ShaderType == ShaderType.Boundary)
+                    CreateGltfMaterialFromEqMaterial(eqMaterial, textureImageFolder);
+                    if (loadVariants)
                     {
-                        _meshMaterialsToSkip.Add(materialName);
-                        continue;
+                        foreach (var variantMaterial in materialList.GetMaterialVariants(eqMaterial, _logger).Where(m => m != null))
+                        {
+                            CreateGltfMaterialFromEqMaterial(variantMaterial, textureImageFolder);
+                        }
                     }
-                    if (eqMaterial.ShaderType == ShaderType.Invisible)
-                    {
-                        Materials.Add(materialName, GetInvisibleMaterial());
-                        continue;
-                    }
-
-                    var imageFileNameWithoutExtension = eqMaterial.GetFirstBitmapNameWithoutExtension();
-                    if (string.IsNullOrEmpty(imageFileNameWithoutExtension)) continue;
-
-                    var imagePath = $"{textureImageFolder}{eqMaterial.GetFirstBitmapExportFilename()}";
-                    
-                    ImageBuilder imageBuilder;
-                    if (ShaderTypesThatNeedAlphaAddedToImage.Contains(eqMaterial.ShaderType))
-                    {
-                        // Materials with these shaders need new images with an alpha channel included to look correct
-                        // Not a fan of having to write new images during the generation phase, but SharpGLTF
-                        // needs the image bytes, and if we want to keep the original images we need to use the
-                        // ImageWriteCallback, and within that callback we only have access to the path the image
-                        // was loaded from, and that can only be set by loading an image via a path. I can't
-                        // even write the images to a temp folder since I won't be able to get the correct Textures
-                        // folder path within the callback to write the image
-                        var convertedImagePath = ImageAlphaConverter.AddAlphaToImage(imagePath, eqMaterial.ShaderType);
-                        var newImageName = Path.GetFileNameWithoutExtension(convertedImagePath);
-                        imageBuilder = ImageBuilder.From(new MemoryImage(convertedImagePath), newImageName);
-                    }
-                    else
-                    {
-                        var imageName = Path.GetFileNameWithoutExtension(imagePath);
-                        imageBuilder = ImageBuilder.From(new MemoryImage(imagePath), imageName);
-                    }
-                    
-                    var gltfMaterial = new MaterialBuilder(materialName)
-                        .WithDoubleSide(false)
-                        .WithMetallicRoughnessShader()
-                        .WithChannelParam(KnownChannel.MetallicRoughness, KnownProperty.RoughnessFactor, MaterialRoughness)
-                        .WithChannelParam(KnownChannel.MetallicRoughness, KnownProperty.MetallicFactor, 0f);
-                    // If we use the method below, the image name is not retained
-                    //    .WithChannelImage(KnownChannel.BaseColor, $"{textureImageFolder}{eqMaterial.GetFirstBitmapExportFilename()}");
-                    gltfMaterial.UseChannel(KnownChannel.BaseColor)
-                        .UseTexture()
-                        .WithPrimaryImage(imageBuilder);
-
-                    switch (eqMaterial.ShaderType)
-                    {
-                        case ShaderType.Transparent25:
-                            gltfMaterial.WithAlpha(AlphaMode.MASK, 0.25f);
-                            break;
-                        case ShaderType.Transparent50:
-                        case ShaderType.TransparentMasked:
-                            gltfMaterial.WithAlpha(AlphaMode.MASK, 0.5f);
-                            break;
-                        case ShaderType.Transparent75:
-                            gltfMaterial.WithAlpha(AlphaMode.MASK, 0.75f);
-                            break;
-                        case ShaderType.TransparentAdditive:
-                        case ShaderType.TransparentAdditiveUnlit:
-                        case ShaderType.TransparentSkydome:
-                        case ShaderType.TransparentAdditiveUnlitSkydome:
-                            gltfMaterial.WithAlpha(AlphaMode.BLEND);
-                            break;
-                        default:
-                            gltfMaterial.WithAlpha(AlphaMode.OPAQUE);
-                            break;
-                    }
-
-                    if (eqMaterial.ShaderType == ShaderType.TransparentAdditiveUnlit ||
-                        eqMaterial.ShaderType == ShaderType.DiffuseSkydome ||
-                        eqMaterial.ShaderType == ShaderType.TransparentAdditiveUnlitSkydome)
-                    {
-                        gltfMaterial.WithUnlitShader();
-                    }
-
-                    Materials.Add(materialName, gltfMaterial);
                 }
             }
         }
 
+        public void ConstructBoundingBoxTree(List<Mesh> meshes, List<DataTypes.BspNode> nodes)
+        {
+            var polygons = new List<(Vector3, Vector3, Vector3)>();
+            foreach (var mesh in meshes)
+            {
+                var meshHelper = new WldMeshHelper(mesh, true, false);
+                var polygonCount = mesh.MaterialGroups.Aggregate(0, (acc, val) => acc + val.PolygonCount);
+
+                for (var i = 0; i < polygonCount; i++)
+                {
+                    var triangle = meshHelper.GetTriangle(i);
+                    var vertexPositions = meshHelper.GetVertexPositions(triangle, false);
+                    polygons.Add(vertexPositions);
+                }
+            }
+            var allPoints = polygons.Aggregate(new List<Vector3>(), (acc, val) =>
+            {
+                acc.Add(val.Item1);
+                acc.Add(val.Item2);
+                acc.Add(val.Item3);
+                return acc;
+            });
+            var firstMinMax = GetMinMax(allPoints);
+            var rootNode = nodes[0];
+            rootNode.BoundingBoxMin = firstMinMax.Item1;
+            rootNode.BoundingBoxMax = firstMinMax.Item2;
+            PopulateWithSubset(nodes, rootNode, polygons);
+        }
+
+        private void PopulateWithSubset(List<DataTypes.BspNode> nodes, DataTypes.BspNode node, List<(Vector3, Vector3, Vector3)> polygons)
+        {
+            var leftPolygons = new List<(Vector3, Vector3, Vector3)>();
+            var rightPolygons = new List<(Vector3, Vector3, Vector3)>();
+
+            foreach (var polygon in polygons)
+            {
+                if (NodeSplitLeft(node, polygon.Item1) && NodeSplitLeft(node, polygon.Item2) && NodeSplitLeft(node, polygon.Item3))
+                {
+                    leftPolygons.Add((polygon.Item1, polygon.Item2, polygon.Item3));
+                }
+                else
+                {
+                    rightPolygons.Add((polygon.Item1, polygon.Item2, polygon.Item3));
+                }
+            }
+
+            if (node.LeftNode != -1)
+            {
+                var leftNode = nodes[node.LeftNode];
+                leftNode.Parent = node;
+                leftNode.IsLeftChild = true;
+                node.LeftChild = leftNode;
+                var (min, max) = GetMinMax(leftPolygons.Aggregate(new List<Vector3>(), (acc, val) =>
+                {
+                    acc.Add(val.Item1);
+                    acc.Add(val.Item2);
+                    acc.Add(val.Item3);
+                    return acc;
+                }));
+                leftNode.BoundingBoxMin = min;
+                leftNode.BoundingBoxMax = max;
+                PopulateWithSubset(nodes, leftNode, leftPolygons);
+            }
+
+            if (node.RightNode != -1)
+            {
+                var rightNode = nodes[node.RightNode];
+                rightNode.Parent = node;
+                rightNode.IsRightChild = true;
+                node.RightChild = rightNode;
+                var (min, max) = GetMinMax(rightPolygons.Aggregate(new List<Vector3>(), (acc, val) =>
+                {
+                    acc.Add(val.Item1);
+                    acc.Add(val.Item2);
+                    acc.Add(val.Item3);
+                    return acc;
+                }));
+                rightNode.BoundingBoxMin = min;
+                rightNode.BoundingBoxMax = max;
+                PopulateWithSubset(nodes, rightNode, rightPolygons);
+            }
+
+            if (node.Region?.RegionType?.RegionTypes.Count > 0)
+            {
+                node.ContainsNonnormalRegion = true;
+                while ((node = node.Parent) != null)
+                {
+                    node.ContainsNonnormalRegion = true;
+                }
+            }
+        }
+
+
+        private bool NodeSplitLeft(DataTypes.BspNode node, Vector3 point)
+        {
+            return ((point.X * node.NormalX) + 0.01 + (point.Y * node.NormalY) + 0.01 + (point.Z * node.NormalZ) + 0.01 + node.SplitDistance) > 0;
+        }
+
+        private (Vector3, Vector3) GetMinMax(List<Vector3> points)
+        {
+            if (points.Count == 0)
+            {
+                return (new Vector3(), new Vector3());
+            }
+            var firstVal = points.FirstOrDefault();
+            return points.Aggregate(
+                (firstVal, firstVal), (acc, point) =>
+            {
+                var (min, max) = acc;
+                if (point.X < min.X)
+                {
+                    min.X = point.X;
+                }
+                else if (point.X > max.X)
+                {
+                    max.X = point.X;
+                }
+                if (point.Y < min.Y)
+                {
+                    min.Y = point.Y;
+                }
+                else if (point.Y > max.Y)
+                {
+                    max.Y = point.Y;
+                }
+                if (point.Z < min.Z)
+                {
+                    min.Z = point.Z;
+                }
+                else if (point.Z > max.Z)
+                {
+                    max.Z = point.Z;
+                }
+                return (min, max);
+            });
+        }
+
+        public void AddRegionData(Mesh mesh, DataTypes.BspNode frag)
+        {
+            var meshBuilder = new MeshBuilder<VertexPositionNormal>(mesh.Name);
+            var materialBuilder = new MaterialBuilder("");
+            var meshHelper = new WldMeshHelper(mesh, _separateTwoFacedTriangles);
+            var polygonCount = mesh.MaterialGroups.Aggregate(0, (acc, val) => acc + val.PolygonCount);
+
+            for (var i = 0; i < polygonCount; i++)
+            {
+                var triangle = meshHelper.GetTriangle(i);
+                var vertexPositions = meshHelper.GetVertexPositions(triangle);
+                var prim = meshBuilder.UsePrimitive(materialBuilder);
+
+                prim.AddTriangle(
+                    new VertexBuilder<VertexPosition, VertexEmpty, VertexEmpty>(new VertexPosition(vertexPositions.v2)),
+                    new VertexBuilder<VertexPosition, VertexEmpty, VertexEmpty>(new VertexPosition(vertexPositions.v1)),
+                    new VertexBuilder<VertexPosition, VertexEmpty, VertexEmpty>(new VertexPosition(vertexPositions.v0))
+                    );
+            }
+
+            var regionMetadata = new System.Dynamic.ExpandoObject() as IDictionary<string, object>;
+            regionMetadata.Add("regions", frag?.Region?.RegionType?.RegionTypes ?? new List<DataTypes.RegionType>());
+
+            if (frag?.Region?.RegionType?.Zoneline != null)
+            {
+                regionMetadata.Add("zoneLine", frag.Region.RegionType.Zoneline);
+            }
+            meshBuilder.Extras = SharpGLTF.IO.JsonContent.Parse(JsonSerializer.Serialize(regionMetadata));
+            _scene.AddRigidMesh(meshBuilder, new AffineTransform(Matrix4x4.Identity));
+        }
+
         public void AddFragmentData(
-            Mesh mesh, 
-            ModelGenerationMode generationMode, 
-            bool isSkinned = false, 
+            Mesh mesh,
+            ModelGenerationMode generationMode,
+            bool isSkinned = false,
             string meshNameOverride = null,
-            int singularBoneIndex = -1, 
-            ObjectInstance objectInstance = null, 
-            int instanceIndex = 0, 
-            bool isZoneMesh = false)
+            int singularBoneIndex = -1,
+            ObjInstance objectInstance = null,
+            int instanceIndex = 0,
+            bool isZoneMesh = false,
+            bool usesMobPieces = false,
+            ICharacterModel characterModel = null,
+            Action<string> addToAnimatedNames = null,
+            int materialVariation = -1,
+            bool secondaryMesh = false,
+            int robeIndex = -1)
         {
             var meshName = meshNameOverride ?? FragmentNameCleaner.CleanName(mesh);
             var transformMatrix = objectInstance == null ? Matrix4x4.Identity : CreateTransformMatrixForObjectInstance(objectInstance);
@@ -251,16 +492,17 @@ namespace LanternExtractor.EQ.Wld.Exporters
             var canExportVertexColors = _exportVertexColors &&
                 ((objectInstance?.Colors?.Colors != null && objectInstance.Colors.Colors.Any())
                 || (mesh?.Colors != null && mesh.Colors.Any()));
-            
-            if (mesh.AnimatedVerticesReference != null && !canExportVertexColors && objectInstance != null && 
+
+            if (mesh.AnimatedVerticesReference == null && !canExportVertexColors && objectInstance != null &&
                 _sharedMeshes.TryGetValue(meshName, out var existingMesh))
             {
                 if (generationMode == ModelGenerationMode.Separate)
                 {
-                    _scene.AddRigidMesh(existingMesh, transformMatrix);
+                    _scene.AddRigidMesh(existingMesh, new AffineTransform(transformMatrix));
                 }
                 return;
             }
+
 
             IMeshBuilder<MaterialBuilder> gltfMesh;
 
@@ -268,6 +510,7 @@ namespace LanternExtractor.EQ.Wld.Exporters
             {
                 meshName += $".{instanceIndex:00}";
             }
+
             if (generationMode == ModelGenerationMode.Combine)
             {
                 if (_combinedMeshBuilder == null)
@@ -281,83 +524,157 @@ namespace LanternExtractor.EQ.Wld.Exporters
                 gltfMesh = InstantiateMeshBuilder(meshName, isSkinned, canExportVertexColors);
             }
 
+            if (isZoneMesh && objectInstance == null)
+            {
+                var zoneMetadata = new System.Dynamic.ExpandoObject() as IDictionary<string, object>;
+                zoneMetadata.Add("zoneMesh", true);
+                gltfMesh.Extras = SharpGLTF.IO.JsonContent.Parse(JsonSerializer.Serialize(zoneMetadata));
+            }
+
+
+
             // Keeping track of vertex indexes for each vertex position in case it's an
             // animated mesh so we can create morph targets later
             var gltfVertexPositionToWldVertexIndex = new Dictionary<VertexPositionNormal, int>();
-            
+
             var polygonIndex = 0;
+            var meshHelper = new WldMeshHelper(mesh, _separateTwoFacedTriangles, isZoneMesh);
             foreach (var materialGroup in mesh.MaterialGroups)
             {
-                var materialName = GetMaterialName(mesh.MaterialList.Materials[materialGroup.MaterialIndex]);
-                if (_meshMaterialsToSkip.Contains(materialName))
+                var material = mesh.MaterialList.Materials[materialGroup.MaterialIndex];
+                var lastPolygonIndex = polygonIndex;
+                Color? baseColor = null;
+                if (characterModel != null)
                 {
-                    polygonIndex += materialGroup.PolygonCount;
-                    continue;
+                    if (characterModel.TryGetMaterialVariation(material.GetFirstBitmapNameWithoutExtension(), out var variationIndex, out var color))
+                    {
+                        var alternateSkins = mesh.MaterialList.GetMaterialVariants(material, _logger);
+                        if (alternateSkins.Any() && alternateSkins.Count() > variationIndex && alternateSkins.ElementAt(variationIndex) != null)
+                        {
+                            material = alternateSkins[variationIndex];
+                        }
+                    }
+                    baseColor = color;
                 }
 
-                if (!Materials.TryGetValue(materialName, out var gltfMaterial))
+                if (materialVariation != -1)
                 {
-                    gltfMaterial = Materials[MaterialBlankName];
+                    var alternateSkins = mesh.MaterialList.GetMaterialVariants(material, _logger);
+                    if (alternateSkins.Any() && alternateSkins.Count() > materialVariation && alternateSkins.ElementAt(materialVariation) != null)
+                    {
+                        material = alternateSkins[materialVariation];
+                    }
                 }
 
-                var primitive = gltfMesh.UsePrimitive(gltfMaterial);
-                for (var i = 0; i < materialGroup.PolygonCount; ++i)
-                {
-                    IDictionary<VertexPositionNormal, int> triangleGtlfVpToWldVi;
-                    if (!canExportVertexColors && !isSkinned)
+                Action writeMesh = () => { 
+                    var materialName = GetMaterialName(material);
+
+                    if (_meshMaterialsToSkip.Contains(materialName) || (characterModel != null && characterModel.ShouldSkipMeshGenerationForMaterial(materialName)))
                     {
-                        triangleGtlfVpToWldVi = AddTriangleToMesh<VertexPositionNormal, VertexTexture1, VertexEmpty>
-                            (primitive, mesh, polygonIndex++, canExportVertexColors, isSkinned, singularBoneIndex, objectInstance);
+                        polygonIndex += materialGroup.PolygonCount;
+                        return;
                     }
-                    else if (!canExportVertexColors && isSkinned)
+
+                    if (!Materials.TryGetValue(materialName, out var gltfMaterial))
                     {
-                        triangleGtlfVpToWldVi = AddTriangleToMesh<VertexPositionNormal, VertexTexture1, VertexJoints4>
-                            (primitive, mesh, polygonIndex++, canExportVertexColors, isSkinned, singularBoneIndex, objectInstance);
+                        gltfMaterial = Materials[MaterialBlankName];
                     }
-                    else if (canExportVertexColors && !isSkinned)
+
+                    if (baseColor != null)
                     {
-                        triangleGtlfVpToWldVi = AddTriangleToMesh<VertexPositionNormal, VertexColor1Texture1, VertexEmpty>
-                            (primitive, mesh, polygonIndex++, canExportVertexColors, isSkinned, singularBoneIndex, objectInstance);
+                        gltfMaterial = gltfMaterial.WithBaseColor(baseColor.Value.ToVector4());
                     }
-                    else //(canExportVertexColors && isSkinned)
+
+                    if (secondaryMesh &&
+                        (gltfMaterial.Name.Contains("he0") || gltfMaterial.Name.Contains("helm")
+                        || gltfMaterial.Name.Contains("leather") || gltfMaterial.Name.Contains("chain")
+                        || gltfMaterial.Name.Contains("plate"))) { 
+                        gltfMaterial = gltfMaterial.Clone();
+                        gltfMaterial.Name = $"{gltfMaterial.Name}-{materialVariation + 1}";
+                    }
+                    var primitive = gltfMesh.UsePrimitive(gltfMaterial);
+                    for (var i = 0; i < materialGroup.PolygonCount; ++i)
                     {
-                        triangleGtlfVpToWldVi = AddTriangleToMesh<VertexPositionNormal, VertexColor1Texture1, VertexJoints4>
-                            (primitive, mesh, polygonIndex++, canExportVertexColors, isSkinned, singularBoneIndex, objectInstance);
+                        IDictionary<VertexPositionNormal, int> triangleGtlfVpToWldVi;
+                        if (!canExportVertexColors && !isSkinned)
+                        {
+                            triangleGtlfVpToWldVi = AddTriangleToMesh<VertexPositionNormal, VertexTexture1, VertexEmpty>
+                                (primitive, meshHelper, polygonIndex++, canExportVertexColors, isSkinned, singularBoneIndex, usesMobPieces, objectInstance, isZoneMesh);
+                        }
+                        else if (!canExportVertexColors && isSkinned)
+                        {
+                            triangleGtlfVpToWldVi = AddTriangleToMesh<VertexPositionNormal, VertexTexture1, VertexJoints4>
+                                (primitive, meshHelper, polygonIndex++, canExportVertexColors, isSkinned, singularBoneIndex, usesMobPieces, objectInstance, isZoneMesh);
+                        }
+                        else if (canExportVertexColors && !isSkinned)
+                        {
+                            triangleGtlfVpToWldVi = AddTriangleToMesh<VertexPositionNormal, VertexColor1Texture1, VertexEmpty>
+                                (primitive, meshHelper, polygonIndex++, canExportVertexColors, isSkinned, singularBoneIndex, usesMobPieces, objectInstance, isZoneMesh);
+                        }
+                        else //(canExportVertexColors && isSkinned)
+                        {
+                            triangleGtlfVpToWldVi = AddTriangleToMesh<VertexPositionNormal, VertexColor1Texture1, VertexJoints4>
+                                (primitive, meshHelper, polygonIndex++, canExportVertexColors, isSkinned, singularBoneIndex, usesMobPieces, objectInstance, isZoneMesh);
+                        }
+                        triangleGtlfVpToWldVi.ToList().ForEach(kv => gltfVertexPositionToWldVertexIndex[kv.Key] = kv.Value);
                     }
-                    triangleGtlfVpToWldVi.ToList().ForEach(kv => gltfVertexPositionToWldVertexIndex[kv.Key] = kv.Value);
-                }
+                    meshHelper.Reset();
+                };
+                writeMesh();
+                if (material.GetFirstBitmapNameWithoutExtension().Contains("clk")) {
+                    
+                    for (int i = 1; i <= 6; i++) { 
+                        polygonIndex = lastPolygonIndex;
+                        var alternateSkins = mesh.MaterialList.GetMaterialVariants(material, _logger).Where(a => a != null);
+                        material = alternateSkins.ElementAt(i);
+                        writeMesh();
+                    }
+                }     
             }
+
             if (generationMode == ModelGenerationMode.Separate)
             {
-                if (mesh.AnimatedVerticesReference != null)
+                if ( mesh.AnimatedVerticesReference != null &&
+                        !AnimatedMeshesSharpGltfWillNotExportMorphTargets.Contains(FragmentNameCleaner.CleanName(mesh, true)))
                 {
-                    AddAnimatedMeshMorphTargets(mesh, gltfMesh, meshName, transformMatrix, gltfVertexPositionToWldVertexIndex);
+                    if (addToAnimatedNames != null) {
+                        addToAnimatedNames(mesh.Name);
+                    }
+                    return;
+                    AddAnimatedMeshMorphTargets(mesh, gltfMesh, meshName, transformMatrix, gltfVertexPositionToWldVertexIndex, isZoneMesh);
                     // mesh added to scene in ^ method
+                }
+                else if (AnimatedDoorObjectOpenTypes.TryGetValue(meshName, out var openType))
+                {
+                    var node = GetDoorAnimationNodeForOpenType(openType, meshName, transformMatrix);
+                    _scene.AddRigidMesh(gltfMesh, node);
                 }
                 else
                 {
-                    _scene.AddRigidMesh(gltfMesh, transformMatrix);
+                    _scene.AddRigidMesh(gltfMesh, new AffineTransform(transformMatrix));
                     _sharedMeshes[meshName] = gltfMesh;
-                }              
+                }
             }
         }
 
-        public void ApplyAnimationToSkeleton(SkeletonHierarchy skeleton, string animationKey, bool isCharacterAnimation, bool staticPose)
+        public void ApplyAnimationToSkeleton(SkeletonHierarchy skeleton, string animationKey, bool isCharacterAnimation, bool staticPose, int? instanceIndex = null)
         {
             if (isCharacterAnimation && !staticPose && animationKey == DefaultModelPoseAnimationKey) return;
-
-            if (!_skeletons.TryGetValue(skeleton.ModelBase, out var skeletonNodes))
+   
+            var skeletonName = GetSkeletonName(skeleton, instanceIndex);
+            if (!_skeletons.TryGetValue(skeletonName, out var skeletonNodes))
             {
                 skeletonNodes = AddNewSkeleton(skeleton);
             }
+            //skeletonNodes.ForEach(node => node.SetLocalTransform(new AffineTransform(MirrorXAxisMatrix), false));
             var animation = skeleton.Animations[animationKey];
             var trackArray = isCharacterAnimation ? animation.TracksCleanedStripped : animation.TracksCleaned;
             var poseArray = isCharacterAnimation
                 ? skeleton.Animations[DefaultModelPoseAnimationKey].TracksCleanedStripped
                 : skeleton.Animations[DefaultModelPoseAnimationKey].TracksCleaned;
-            
+
             if (poseArray == null) return;
-            
+            var hasChildren = _skeletonChildrenAttachBones.TryGetValue(skeleton.ModelBase, out var skeletonChildrenAttachBones);
             for (var i = 0; i < skeleton.Skeleton.Count; i++)
             {
                 var boneName = isCharacterAnimation
@@ -370,8 +687,19 @@ namespace LanternExtractor.EQ.Wld.Exporters
 
                     var poseTransform = poseArray[boneName].TrackDefFragment.Frames[0];
                     if (poseTransform == null) return;
-
+                   // poseTransform.Translation = new vec3(poseTransform.Translation.x * -1, poseTransform.Translation.y, poseTransform.Translation.z);
                     ApplyBoneTransformation(skeletonNodes[i], poseTransform, animationKey, 0, staticPose);
+                    if (hasChildren && skeletonChildrenAttachBones.Where(c => c.Item2 == boneName).Any())
+                    {
+                        foreach (var child in skeletonChildrenAttachBones.Where(c => c.Item2 == boneName))
+                        {
+                            var childSkeleton = _skeletons[child.Item1];
+                            foreach (var childBone in childSkeleton)
+                            {
+                                ApplyBoneTransformation(childBone, poseTransform, animationKey, 0, staticPose);
+                            }
+                        }
+                    }
                     continue;
                 }
 
@@ -387,6 +715,14 @@ namespace LanternExtractor.EQ.Wld.Exporters
                     {
                         ApplyBoneTransformation(skeletonNodes[i], boneTransform, animationKey, animation.AnimationTimeMs, staticPose);
                     }
+                    if (hasChildren && skeletonChildrenAttachBones.Where(c => c.Item2 == boneName).Any())
+                    {
+                        foreach (var child in skeletonChildrenAttachBones.Where(c => c.Item2 == boneName))
+                        {
+                            var childSkeleton = _skeletons[child.Item1];
+                            ApplyBoneTransformation(childSkeleton[0], boneTransform, animationKey, 0, staticPose);
+                        }
+                    }
 
                     totalTimeForBone += isCharacterAnimation ?
                         (animation.AnimationTimeMs / animation.FrameCount) :
@@ -395,12 +731,41 @@ namespace LanternExtractor.EQ.Wld.Exporters
             }
         }
 
-        public void AddCombinedMeshToScene(
-            bool isZoneMesh = false, 
-            string meshName = null, 
-            string skeletonModelBase = null, 
-            ObjectInstance objectInstance = null)
+        public void AddLightInstances(IEnumerable<LightInstance> lightInstances, float lightIntensityMultiplier)
         {
+            var groupedLightInstances = lightInstances.GroupBy(i => new UniqueLight(i));
+
+            foreach (var uniqueLightGroups in groupedLightInstances)
+            {
+                var uniqueLight = uniqueLightGroups.Key;
+                var light = new LightBuilder.Point()
+                {
+                    Color = uniqueLight.Color,
+                    Intensity = uniqueLight.Radius * lightIntensityMultiplier
+                    // Range = uniqueLight.Radius * ZoneScaleMultiplier
+                };
+                foreach (var lightInstance in uniqueLightGroups)
+                {
+                    var position = lightInstance.Position.ToVector3(swapYandZ: true);
+                    var translationMatrix = Matrix4x4.CreateTranslation(position) * CorrectedWorldMatrix * MirrorXAxis;
+                    Matrix4x4.Decompose(translationMatrix, out _, out _, out var translation);
+                    var lightName = lightInstance.LightReference?.LightSource?.Name;
+                    var node = new NodeBuilder(lightName != null ? lightName.Split('_')[0] : "");
+                    // node.WithTranslation(translation) makes VS complain for some reason
+                    node.LocalTransform = node.LocalTransform.WithTranslation(translation);
+                    _scene.AddLight(light, node);
+                }
+            }
+        }
+
+        public void AddCombinedMeshToScene(
+            bool isZoneMesh = false,
+            string meshName = null,
+            string skeletonModelBase = null,
+            ObjInstance objectInstance = null,
+            int? instanceIndex = null)
+        {
+
             IMeshBuilder<MaterialBuilder> combinedMesh;
             if (meshName != null && _sharedMeshes.TryGetValue(meshName, out var existingMesh))
             {
@@ -412,8 +777,10 @@ namespace LanternExtractor.EQ.Wld.Exporters
             }
             if (combinedMesh == null) return;
 
+            var skeletonName = GetSkeletonName(skeletonModelBase, instanceIndex);
+
             var worldTransformMatrix = Matrix4x4.Identity;
-            if (objectInstance != null)
+            if (objectInstance != null && skeletonName == null)
             {
                 worldTransformMatrix *= CreateTransformMatrixForObjectInstance(objectInstance);
                 worldTransformMatrix *= CorrectedWorldMatrix;
@@ -424,16 +791,32 @@ namespace LanternExtractor.EQ.Wld.Exporters
             }
             else
             {
-                worldTransformMatrix *= Matrix4x4.CreateReflection(new Plane(0, 0, 1, 0));
+                worldTransformMatrix *= CorrectedSingularActorMatrix;
             }
 
-            if (skeletonModelBase == null || !_skeletons.TryGetValue(skeletonModelBase, out var skeleton))
+            if (skeletonName == null || !_skeletons.TryGetValue(skeletonName, out var skeletonNodes))
             {
-                _scene.AddRigidMesh(combinedMesh, worldTransformMatrix);
+                _scene.AddRigidMesh(combinedMesh, new AffineTransform(worldTransformMatrix));
+                if (_combinedMeshBuilder != null)
+                {
+                    _scene.AddRigidMesh(_combinedMeshBuilder, new AffineTransform(worldTransformMatrix));
+                }
             }
             else
             {
-                _scene.AddSkinnedMesh(combinedMesh, worldTransformMatrix, skeleton.ToArray());
+                if (_skeletonChildrenAttachBones.TryGetValue(skeletonName, out var children))
+                {
+                    foreach (var child in children)
+                    {
+                        skeletonNodes.AddRange(_skeletons[child.Item1]);
+                    }
+                }
+                if (objectInstance != null)
+                {
+                    worldTransformMatrix = skeletonNodes[0].Parent.WorldMatrix;
+                }
+
+                _scene.AddSkinnedMesh(combinedMesh, worldTransformMatrix, skeletonNodes.ToArray());
             }
 
             if (meshName != null && !_sharedMeshes.ContainsKey(meshName))
@@ -448,35 +831,129 @@ namespace LanternExtractor.EQ.Wld.Exporters
             WriteAssetToFile(fileName, false);
         }
 
-        public void WriteAssetToFile(string fileName, bool useExistingImages, string skeletonModelBase = null)
+        public void WriteAssetToFile(string fileName, bool useExistingImages, string skeletonModelBase = null, bool cleanupTexturesFolder = false)
         {
             AddCombinedMeshToScene(false, null, skeletonModelBase);
+
             var outputFilePath = FixFilePath(fileName);
             var model = _scene.ToGltf2();
+
+            foreach (var node in model.LogicalNodes)
+            {
+                if (node.Mesh != null && (node.Mesh.Extras.Content?.ToString() ?? string.Empty) != string.Empty)
+                {
+                    node.Extras = node.Mesh.Extras;
+                    JsonNode regionTypes = JsonSerializer.Deserialize<JsonNode>(node.Extras.ToJson())["regions"];
+                    if (regionTypes != null) {
+                        var reg = regionTypes.AsArray().Select(a => a.GetValue<int>().ToString());
+                        node.Name = $"region_{string.Join("-", reg)}";
+                    }
+                }
+            }
+
             if (_exportFormat == GltfExportFormat.GlTF)
             {
                 if (!useExistingImages)
                 {
-                    model.SaveGLTF(outputFilePath);
-                    return;
-                }
-                var writeSettings = new SharpGLTF.Schema2.WriteSettings()
-                {
-                    JsonIndented = true,
-                    ImageWriteCallback = (context, uri, image) =>
+                    // Don't rename the image files
+                    var writeSettings = new SharpGLTF.Schema2.WriteSettings()
                     {
-                        var imageSourcePath = image.SourcePath;
-                        return $"Textures/{Path.GetFileName(imageSourcePath)}";
-                    }
-                };
+                        JsonIndented = true,
+                        ImageWriteCallback = (context, uri, image) =>
+                        {
+                            var imageSourcePath = image.SourcePath;
+                            var imageFileName = Path.GetFileName(imageSourcePath);
+                            // Save image to same path as the .gltf
+                            var newImagePath = Path.Combine(Path.GetDirectoryName(fileName), imageFileName);
+                            image.SaveToFile(newImagePath);
 
-                model.SaveGLTF(outputFilePath, writeSettings);
+                            return imageFileName;
+                        }
+                    };
+                    model.SaveGLTF(outputFilePath, writeSettings);
+                }
+                else
+                {
+                    var writeSettings = new SharpGLTF.Schema2.WriteSettings()
+                    {
+                        JsonIndented = true,
+                        ImageWriteCallback = (context, uri, image) =>
+                        {
+                            var imageSourcePath = image.SourcePath;
+                            return $"Textures/{Path.GetFileName(imageSourcePath)}";
+                        }
+                    };
+                    model.SaveGLTF(outputFilePath, writeSettings);
+                }
             }
             else // Glb
             {
                 model.SaveGLB(outputFilePath);
             }
+            if (cleanupTexturesFolder)
+            {
+                var outputFolder = Path.GetDirectoryName(outputFilePath);
+                Directory.Delete(Path.Combine(outputFolder, "Textures"), true);
+            }
         }
+
+        public List<NodeBuilder> AddNewSkeleton(SkeletonHierarchy skeleton, string parent = null, string attachBoneName = null, ObjInstance objInstance = null, int? instanceIndex = null)
+        {
+            var skeletonNodes = new List<NodeBuilder>();
+            var duplicateNameDictionary = new Dictionary<string, int>();
+            var skeletonName = GetSkeletonName(skeleton, instanceIndex);
+            var boneNamePrefix = instanceIndex != null ? $"{skeletonName}_" : "";
+            foreach (var bone in skeleton.Skeleton)
+            {
+                var boneName = bone.CleanedName;
+  
+                if (duplicateNameDictionary.TryGetValue(boneName, out var count))
+                {
+                    skeletonNodes.Add(new NodeBuilder($"{boneNamePrefix}{boneName}_{count:00}"));
+                    duplicateNameDictionary[boneName] = ++count;
+                }
+                else
+                {
+                    skeletonNodes.Add(new NodeBuilder($"{boneNamePrefix}{boneName}"));
+                    duplicateNameDictionary.Add(boneName, 0);
+                }
+            }
+            if (objInstance != null)
+            {
+                var rootNode = GetRootSkeletonNodeTransformsFromObjectInstance(skeletonName, objInstance);
+                rootNode.AddNode(skeletonNodes[0]);
+            }
+            for (var i = 0; i < skeletonNodes.Count; i++)
+            {
+                var node = skeletonNodes[i];
+                var bone = skeleton.Skeleton[i];
+                bone.Children.ForEach(b => node.AddNode(skeletonNodes[b]));
+            }
+            if (parent != null && attachBoneName != null)
+            {
+                if (!_skeletons.TryGetValue(parent, out var parentSkeleton))
+                {
+                    throw new InvalidOperationException($"Cannot attach child skeleton to parent: {parent}. It does not exist");
+                }
+                var attachBone = parentSkeleton
+                    .Where(n => n.Name.Equals(attachBoneName, StringComparison.InvariantCultureIgnoreCase))
+                    .SingleOrDefault();
+                if (attachBone == null)
+                {
+                    throw new InvalidOperationException($"Cannot attach child skeleton to parent: {parent} at bone {attachBoneName}. Bone does not exist");
+                }
+                attachBone.AddNode(skeletonNodes[0]);
+
+                if (!_skeletonChildrenAttachBones.ContainsKey(parent))
+                {
+                    _skeletonChildrenAttachBones.Add(parent, new List<(string, string)>());
+                }
+                _skeletonChildrenAttachBones[parent].Add((skeleton.ModelBase, attachBoneName));
+            }
+            _skeletons.Add(skeletonName, skeletonNodes);
+            return skeletonNodes;
+        }
+
         public override void ClearExportData()
         {
             _scene = null;
@@ -489,16 +966,168 @@ namespace LanternExtractor.EQ.Wld.Exporters
 
         public new int GetExportByteCount() => 0;
 
-        private Matrix4x4 CreateTransformMatrixForObjectInstance(ObjectInstance instance)
+        private void CreateGltfMaterialFromEqMaterial(Material eqMaterial, string textureImageFolder)
         {
-            var transformMatrix = Matrix4x4.CreateScale(instance.Scale.ToVector3())
+            var materialName = GetMaterialName(eqMaterial);
+
+            if (Materials.ContainsKey(materialName)) return;
+
+            if (eqMaterial.ShaderType == ShaderType.Boundary)
+            {
+                _meshMaterialsToSkip.Add(materialName);
+                return;
+            }
+            if (eqMaterial.ShaderType == ShaderType.Invisible)
+            {
+                Materials.Add(materialName, GetInvisibleMaterial());
+                return;
+            }
+
+            var imageFileNameWithoutExtension = eqMaterial.GetFirstBitmapNameWithoutExtension();
+            if (string.IsNullOrEmpty(imageFileNameWithoutExtension)) return;
+
+            var imagePath = Path.Combine(textureImageFolder, eqMaterial.GetFirstBitmapExportFilename());
+
+            if (!File.Exists(imagePath))
+            {
+                if (ImagesInZoneFoundInObj.Contains(imageFileNameWithoutExtension))
+                {
+                    _logger.LogWarning($"Zone material: {materialName} image {imageFileNameWithoutExtension}.png not availible until _obj is processed! Manual correction required.");
+                }
+                else
+                {
+                    _logger.LogError($"Material: {materialName} image not found at '{imagePath}'!");
+                }
+                Materials.Add(materialName, GetBlankMaterial(materialName));
+            }
+
+            ImageBuilder imageBuilder;
+            if (ShaderTypesThatNeedAlphaAddedToImage.Contains(eqMaterial.ShaderType))
+            {
+                // Materials with these shaders need new images with an alpha channel included to look correct
+                // Not a fan of having to write new images during the generation phase, but SharpGLTF
+                // needs the image bytes, and if we want to keep the original images we need to use the
+                // ImageWriteCallback, and within that callback we only have access to the path the image
+                // was loaded from, and that can only be set by loading an image via a path. I can't
+                // even write the images to a temp folder since I won't be able to get the correct Textures
+                // folder path within the callback to write the image
+                var convertedImagePath = ImageAlphaConverter.AddAlphaToImage(imagePath, eqMaterial.ShaderType);
+                var newImageName = Path.GetFileNameWithoutExtension(convertedImagePath);
+                imageBuilder = ImageBuilder.From(new MemoryImage(convertedImagePath), newImageName);
+
+                // No support for animated textures, but in case the user wishes to add the frames
+                // somehow in post-process, add alpha to all frames of the animated texture
+                if ((eqMaterial.BitmapInfoReference?.BitmapInfo.AnimationDelayMs ?? 0) > 0)
+                {
+                    var animationFrameBitmaps = eqMaterial.BitmapInfoReference.BitmapInfo.BitmapNames;
+                    for (var i = 1; i < animationFrameBitmaps.Count(); i++)
+                    {
+                        var frameImageFile = animationFrameBitmaps[i].GetExportFilename();
+                        var frameImageFilePath = Path.Combine(textureImageFolder, frameImageFile);
+                        ImageAlphaConverter.AddAlphaToImage(frameImageFilePath, eqMaterial.ShaderType);
+                    }
+                }
+            }
+            else
+            {
+                var imageName = Path.GetFileNameWithoutExtension(imagePath);
+                try
+                {
+                    imageBuilder = ImageBuilder.From(new MemoryImage(imagePath), imageName);
+                }
+                catch (Exception e)
+                {
+                    return;
+                }
+
+            }
+
+            var gltfMaterial = new MaterialBuilder(materialName)
+                .WithDoubleSide(false)
+                .WithMetallicRoughnessShader()
+                .WithChannelParam(KnownChannel.MetallicRoughness, KnownProperty.RoughnessFactor, MaterialRoughness)
+                .WithChannelParam(KnownChannel.MetallicRoughness, KnownProperty.MetallicFactor, 0f)
+                .WithChannelParam(KnownChannel.SpecularFactor, KnownProperty.SpecularFactor, 0f); // Helps models look better in some renderers.
+                                                                                                  // If we use the method below, the image name is not retained
+                                                                                                  //    .WithChannelImage(KnownChannel.BaseColor, $"{textureImageFolder}{eqMaterial.GetFirstBitmapExportFilename()}");
+            gltfMaterial.UseChannel(KnownChannel.BaseColor)
+                .UseTexture()
+                .WithPrimaryImage(imageBuilder);
+
+            switch (eqMaterial.ShaderType)
+            {
+                case ShaderType.TransparentMasked:
+                    gltfMaterial.WithAlpha(AlphaMode.MASK, 0.5f);
+                    break;
+                case ShaderType.Transparent25:
+                case ShaderType.Transparent50:
+                case ShaderType.Transparent75:
+                case ShaderType.TransparentAdditive:
+                case ShaderType.TransparentAdditiveUnlit:
+                case ShaderType.TransparentSkydome:
+                case ShaderType.TransparentAdditiveUnlitSkydome:
+                    gltfMaterial.WithAlpha(AlphaMode.BLEND);
+                    break;
+                default:
+                    gltfMaterial.WithAlpha(AlphaMode.OPAQUE);
+                    break;
+            }
+
+            if (eqMaterial.ShaderType == ShaderType.TransparentAdditiveUnlit ||
+                eqMaterial.ShaderType == ShaderType.DiffuseSkydome ||
+                eqMaterial.ShaderType == ShaderType.TransparentAdditiveUnlitSkydome)
+            {
+                gltfMaterial.WithUnlitShader();
+            }
+            try {
+                Materials.Add(materialName, gltfMaterial);
+            } catch (Exception e) {
+                var r = 123;
+            }
+            
+        }
+        private Matrix4x4 CreateTransformMatrixForObjectInstance(ObjInstance instance)
+        {
+            var transformMatrix = Matrix4x4.CreateScale(instance.Scale)
                 * Matrix4x4.CreateFromYawPitchRoll(
-                    (float)(instance.Rotation.z * Math.PI)/180,
-                    (float)(instance.Rotation.x * Math.PI)/180,
-                    (float)(instance.Rotation.y * Math.PI)/180
+                    -1 * (float)(instance.Rotation.Z * Math.PI) / 180f,
+                    (float)(instance.Rotation.X * Math.PI) / 180f,
+                    (float)(instance.Rotation.Y * Math.PI) / 180f
                 )
-                * Matrix4x4.CreateTranslation(instance.Position.ToVector3(true));
+                * Matrix4x4.CreateTranslation(instance.Position);
             return transformMatrix;
+        }
+
+        private string GetSkeletonName(SkeletonHierarchy skeleton, int? instanceIndex = null)
+        {
+            if (skeleton == null) return null;
+
+            return GetSkeletonName(skeleton.ModelBase, instanceIndex);
+        }
+
+        private string GetSkeletonName(string skeletonModelBase, int? instanceIndex = null)
+        {
+            if (skeletonModelBase == null) return null;
+
+            if (instanceIndex != null)
+            {
+                return $"{skeletonModelBase}_{instanceIndex:000}";
+            }
+            return skeletonModelBase;
+        }
+
+        private NodeBuilder GetRootSkeletonNodeTransformsFromObjectInstance(string name, ObjInstance instance)
+        {
+            var rootNode = new NodeBuilder(name);
+            var instanceTransformMatrix = CreateTransformMatrixForObjectInstance(instance);
+            var zoneInstanceTransformMatrix = instanceTransformMatrix * CorrectedWorldMatrix;
+            Matrix4x4.Decompose(zoneInstanceTransformMatrix, out var scale, out var rotation, out var translation);
+            rotation = Quaternion.Normalize(rotation);
+            rootNode.WithLocalScale(scale)
+                .WithLocalRotation(rotation)
+                .WithLocalTranslation(translation);
+
+            return rootNode;
         }
 
         private string GetMaterialName(Material eqMaterial)
@@ -506,9 +1135,10 @@ namespace LanternExtractor.EQ.Wld.Exporters
             return $"{MaterialList.GetMaterialPrefix(eqMaterial.ShaderType)}{eqMaterial.GetFirstBitmapNameWithoutExtension()}";
         }
 
-        private MaterialBuilder GetBlankMaterial()
+        private MaterialBuilder GetBlankMaterial(string name = null)
         {
-            return new MaterialBuilder(MaterialBlankName)
+            var materialName = name ?? MaterialBlankName;
+            return new MaterialBuilder(materialName)
                 .WithDoubleSide(false)
                 .WithMetallicRoughnessShader()
                 .WithChannelParam(KnownChannel.BaseColor, KnownProperty.RGBA, new Vector4(1, 1, 1, 1));
@@ -530,65 +1160,53 @@ namespace LanternExtractor.EQ.Wld.Exporters
                 canExportVertexColors ? typeof(VertexColor1Texture1) : typeof(VertexTexture1),
                 isSkinned ? typeof(VertexJoints4) : typeof(VertexEmpty));
 
-            return (IMeshBuilder<MaterialBuilder>) Activator.CreateInstance(meshBuilderType, meshName);
+            return (IMeshBuilder<MaterialBuilder>)Activator.CreateInstance(meshBuilderType, meshName);
         }
 
-        private IDictionary<VertexPositionNormal,int> AddTriangleToMesh<TvG, TvM, TvS>(
-            IPrimitiveBuilder primitive, Mesh mesh,
+        private IDictionary<VertexPositionNormal, int> AddTriangleToMesh<TvG, TvM, TvS>(
+            IPrimitiveBuilder primitive, WldMeshHelper meshHelper,
             int polygonIndex, bool canExportVertexColors, bool isSkinned,
-            int singularBoneIndex = -1, ObjectInstance objectInstance = null)
+            int singularBoneIndex = -1, bool usesMobPieces = false, ObjInstance objectInstance = null, bool isZoneMesh = false)
                 where TvG : struct, IVertexGeometry
                 where TvM : struct, IVertexMaterial
                 where TvS : struct, IVertexSkinning
         {
-            var triangle = mesh.Indices[polygonIndex];
-            (int v0, int v1, int v2) vertexIndices = (triangle.Vertex1, triangle.Vertex2, triangle.Vertex3);
-            (Vector3 v0, Vector3 v1, Vector3 v2) vertexPositions = (
-                (mesh.Vertices[vertexIndices.v0] + mesh.Center).ToVector3(true),
-                (mesh.Vertices[vertexIndices.v1] + mesh.Center).ToVector3(true),
-                (mesh.Vertices[vertexIndices.v2] + mesh.Center).ToVector3(true));
-            (Vector3 v0, Vector3 v1, Vector3 v2) vertexNormals = (
-                Vector3.Normalize(-mesh.Normals[vertexIndices.v0].ToVector3()),
-                Vector3.Normalize(-mesh.Normals[vertexIndices.v1].ToVector3()),
-                Vector3.Normalize(-mesh.Normals[vertexIndices.v2].ToVector3()));
-            (Vector2 v0, Vector2 v1, Vector2 v2) vertexUvs = (
-                mesh.TextureUvCoordinates[vertexIndices.v0].ToVector2(true),
-                mesh.TextureUvCoordinates[vertexIndices.v1].ToVector2(true),
-                mesh.TextureUvCoordinates[vertexIndices.v2].ToVector2(true));
-            (int v0, int v1, int v2) boneIndexes = (singularBoneIndex, singularBoneIndex, singularBoneIndex);
-            if (isSkinned && singularBoneIndex == -1)
-            {
-                boneIndexes = (
-                    GetBoneIndexForVertex(mesh, vertexIndices.v0),
-                    GetBoneIndexForVertex(mesh, vertexIndices.v1),
-                    GetBoneIndexForVertex(mesh, vertexIndices.v2));
-            }
-            (Vector4? v0, Vector4? v1, Vector4? v2) vertexColors = (null, null, null);
-            if (canExportVertexColors)
-            {
-                vertexColors = GetVertexColorVectors(mesh, vertexIndices, objectInstance);
-            }
+            var triangle = meshHelper.GetTriangle(polygonIndex);
+            var vertexPositions = meshHelper.GetVertexPositions(triangle);
+            var vertexNormals = meshHelper.GetVertexNormals(triangle);
+            var vertexUvs = meshHelper.GetVertexUvs(triangle);
+            var boneIndexes = meshHelper.GetBoneIndexes(triangle, isSkinned, usesMobPieces, singularBoneIndex);
+            var vertexColors = meshHelper.GetVertexColorVectors(triangle, canExportVertexColors, objectInstance);
 
             var vertex0 = GetGltfVertex<TvG, TvM, TvS>(vertexPositions.v0, vertexNormals.v0, vertexUvs.v0, vertexColors.v0, isSkinned, boneIndexes.v0);
             var vertex1 = GetGltfVertex<TvG, TvM, TvS>(vertexPositions.v1, vertexNormals.v1, vertexUvs.v1, vertexColors.v1, isSkinned, boneIndexes.v1);
             var vertex2 = GetGltfVertex<TvG, TvM, TvS>(vertexPositions.v2, vertexNormals.v2, vertexUvs.v2, vertexColors.v2, isSkinned, boneIndexes.v2);
-            if (isSkinned)
+
+            // Always use clockwise rotation to offset the mirrored x axis
+            // If we're embedding in a zone or applying to a skinned model
+                
+            if (objectInstance != null || isSkinned || isZoneMesh)
             {
-                // Normals come out wrong for skinned models unless we add the triangle
-                // vertices in reverse order
                 primitive.AddTriangle(vertex2, vertex1, vertex0);
             }
-            else
-            {
-                primitive.AddTriangle(vertex0, vertex1, vertex2);
-            }
-
+            else { 
+                
+                primitive.AddTriangle(vertex2, vertex1, vertex0);
+                }
+            //if (objectInstance != null || isSkinned || isZoneMesh)
+            //{
+            //    primitive.AddTriangle(vertex2, vertex1, vertex0);
+            //}
+            //else
+            //{
+            //    primitive.AddTriangle(vertex0, vertex1, vertex2);
+            //}
 
             var gltfVpToWldVi = new Dictionary<VertexPositionNormal, int>();
 
-            gltfVpToWldVi[new VertexPositionNormal(vertexPositions.v0, vertexNormals.v0)] = vertexIndices.v0;
-            gltfVpToWldVi[new VertexPositionNormal(vertexPositions.v1, vertexNormals.v1)] = vertexIndices.v1;
-            gltfVpToWldVi[new VertexPositionNormal(vertexPositions.v2, vertexNormals.v2)] = vertexIndices.v2;
+            gltfVpToWldVi[new VertexPositionNormal(vertexPositions.v0, vertexNormals.v0)] = triangle.Vertex1;
+            gltfVpToWldVi[new VertexPositionNormal(vertexPositions.v1, vertexNormals.v1)] = triangle.Vertex2;
+            gltfVpToWldVi[new VertexPositionNormal(vertexPositions.v2, vertexNormals.v2)] = triangle.Vertex3;
 
             return gltfVpToWldVi;
         }
@@ -625,17 +1243,297 @@ namespace LanternExtractor.EQ.Wld.Exporters
             return (VertexBuilder<TvG, TvM, TvS>)vertexBuilder;
         }
 
-        private (Vector4 v0, Vector4 v1, Vector4 v2) GetVertexColorVectors(Mesh mesh, 
-            (int v0, int v1, int v2) vertexIndices, ObjectInstance objectInstance = null)
+        private void AddAnimatedMeshMorphTargets(Mesh mesh, IMeshBuilder<MaterialBuilder> gltfMesh,
+            string meshName, Matrix4x4 transformMatrix, Dictionary<VertexPositionNormal, int> gltfVertexPositionToWldVertexIndex, bool mirrorAxis)
         {
-            var objInstanceColors = objectInstance?.Colors?.Colors ?? new List<WldColor>();
-            var meshColors = mesh?.Colors ?? new List<WldColor>();
+            var frameTimes = new List<float>();
+            var weights = new List<float>();
+            var frameDelay = mesh.AnimatedVerticesReference.MeshAnimatedVertices.Delay / 1000f;
 
-            var v0Color = CoalesceVertexColor(meshColors, objInstanceColors, vertexIndices.v0);
-            var v1Color = CoalesceVertexColor(meshColors, objInstanceColors, vertexIndices.v1);
-            var v2Color = CoalesceVertexColor(meshColors, objInstanceColors, vertexIndices.v2);
+            for (var frame = 0; frame < mesh.AnimatedVerticesReference.MeshAnimatedVertices.Frames.Count; frame++)
+            {
+                var vertexPositionsForFrame = mesh.AnimatedVerticesReference.MeshAnimatedVertices.Frames[frame];
+                var morphTarget = gltfMesh.UseMorphTarget(frame);
+
+                foreach (var vertexGeometry in gltfVertexPositionToWldVertexIndex.Keys)
+                {
+                    var vertexIndex = gltfVertexPositionToWldVertexIndex[vertexGeometry];
+                    var wldVertexPositionForFrame = vertexPositionsForFrame[vertexIndex];
+                    var newPosition = Vector3.Transform((wldVertexPositionForFrame + mesh.Center).ToVector3(true), mirrorAxis ? MirrorXAxis : Matrix4x4.Identity);
+                    vertexGeometry.TryGetNormal(out var originalNormal);
+                    morphTarget.SetVertex(vertexGeometry, new VertexPositionNormal(newPosition, originalNormal));
+                }
+                frameTimes.Add(frame * frameDelay);
+                weights.Add(1);
+            }
+
+            var node = new NodeBuilder(meshName);
+            node.LocalTransform = new AffineTransform(transformMatrix);
+
+            var instance = _scene.AddRigidMesh(gltfMesh, node);
+            instance.Content.UseMorphing().SetValue(weights.ToArray());
+            var track = instance.Content.UseMorphing($"Default_{mesh.Name}");
+            var morphTargetElements = new float[frameTimes.Count];
+
+            for (var i = 0; i < frameTimes.Count; i++)
+            {
+                Array.Clear(morphTargetElements, 0, morphTargetElements.Length);
+                morphTargetElements[i] = 1;
+                track.SetPoint(frameTimes[i], true, morphTargetElements);
+            }
+        }
+
+        private NodeBuilder GetDoorAnimationNodeForOpenType(int openType, string meshName, Matrix4x4 transformMatrix)
+        {
+            // For now, this is just windmill blades (105) and some other spinning
+            // objects (100) like windmill shafts and akanon lights. The only other
+            // doors that automatically move are a few traps in sol A and B
+            var node = new NodeBuilder(meshName);
+            node.LocalTransform = new AffineTransform(transformMatrix);
+            // Rotation part of the local transform is being lost with the animation -
+            // extract it out and multiply it with the animation steps
+            Matrix4x4.Decompose(transformMatrix, out _, out var baseRotation, out _);
+            switch (openType)
+            {
+                case 100:
+                    node.UseRotation("Default")
+                        .WithPoint(0f, baseRotation)
+                        .WithPoint(4.25f, baseRotation * Quaternion.CreateFromAxisAngle(Vector3.UnitY, -(float)Math.PI))
+                        .WithPoint(8.5f, baseRotation * Quaternion.CreateFromAxisAngle(Vector3.UnitY, -(float)(2 * Math.PI)));
+                    return node;
+                case 105:
+                    node.UseRotation("Default")
+                        .WithPoint(0f, baseRotation)
+                        .WithPoint(4.25f, baseRotation * Quaternion.CreateFromAxisAngle(Vector3.UnitZ, (float)Math.PI))
+                        .WithPoint(8.5f, baseRotation * Quaternion.CreateFromAxisAngle(Vector3.UnitZ, (float)(2 * Math.PI)));
+                    return node;
+                default:
+                    return node;
+            }
+        }
+        private void ApplyBoneTransformation(NodeBuilder boneNode, DataTypes.BoneTransform boneTransform,
+            string animationKey, int timeMs, bool staticPose)
+        {
+            var scaleVector = new Vector3(boneTransform.Scale);
+
+            var rotationQuaternion = new Quaternion()
+            {
+                X = (float)(boneTransform.Rotation.x * Math.PI) / 180,
+                Y = (float)(boneTransform.Rotation.z * Math.PI) / 180,
+                Z = (float)(boneTransform.Rotation.y * -1 * Math.PI) / 180,
+                W = (float)(boneTransform.Rotation.w * Math.PI) / 180
+            };
+            rotationQuaternion = Quaternion.Normalize(rotationQuaternion);
+           // rotationQuaternion.X *= -1;
+            var translationVector = boneTransform.Translation.ToVector3(true);
+            translationVector.Z = -translationVector.Z;
+            //translationVector.Y = -translationVector.Y;
+            // translationVector.X = -translationVector.X;
+
+            if (!AnimationDescriptions.TryGetValue(animationKey, out var animationDescription))
+            {
+                animationDescription = animationKey;
+            }
+
+            if (staticPose)
+            {
+                boneNode
+                    .WithLocalScale(scaleVector)
+                    .WithLocalRotation(rotationQuaternion)
+                    .WithLocalTranslation(translationVector);
+            }
+            else
+            {
+                boneNode
+                    .UseScale(animationDescription)
+                    .WithPoint(timeMs / 1000f, scaleVector);
+                boneNode
+                    .UseRotation(animationDescription)
+                    .WithPoint(timeMs / 1000f, rotationQuaternion);
+                boneNode
+                    .UseTranslation(animationDescription)
+                    .WithPoint(timeMs / 1000f, translationVector);
+            }
+        }
+
+        private string FixFilePath(string filePath)
+        {
+            var fixedExtension = _exportFormat == GltfExportFormat.GlTF ? ".gltf" : ".glb";
+            return Path.ChangeExtension(filePath, fixedExtension);
+        }
+    }
+
+    public class ObjInstance
+    {
+        public string Name { get; private set; }
+        public ObjType Type { get; private set; }
+        public Vector3 Position { get; private set; }
+        public Vector3 Rotation { get; private set; }
+        public Vector3 Scale { get; private set; }
+        public VertexColors Colors { get; private set; }
+
+        public ObjInstance(ObjectInstance objectInstanceFragment)
+        {
+            Name = objectInstanceFragment.ObjectName;
+            Position = Vector3.Transform(objectInstanceFragment.Position.ToVector3(true), GltfWriter.MirrorXAxis);
+            Rotation = objectInstanceFragment.Rotation.ToVector3();
+            Scale = objectInstanceFragment.Scale.ToVector3();
+            Colors = objectInstanceFragment.Colors;
+            Type = ObjType.ZoneInstance;
+        }
+
+        public ObjInstance(Door door)
+        {
+            Name = door.Name;
+            Position = new Vector3(
+                door.Position.Y,
+                door.Position.Z,
+                door.Position.X
+            );
+            Rotation = new Vector3(0f, door.Incline * 360f / 512f, -(float)(door.Heading * 360d / 512d));
+            Scale = new Vector3(1f);
+
+            Type = ObjType.Door;
+        }
+
+        public enum ObjType
+        {
+            ZoneInstance = 0,
+            Door = 1
+        }
+    }
+
+    public class WldMeshHelper
+    {
+        private readonly Mesh _wldMesh;
+        private readonly bool _separateTwoFacedTriangles;
+        private readonly ISet<DataTypes.Polygon> _uniqueTriangles;
+        private readonly IDictionary<int, Vector3> _wldVertexIndexToDuplicatedVertexNormals;
+        private readonly TriangleVertexSetComparer _triangleSetComparer;
+        private readonly Matrix4x4 _transformMatrix;
+
+        private static readonly Vector4 DefaultVertexColor = new Vector4(0f, 0f, 0f, 1f); // Black
+
+        public WldMeshHelper(Mesh wldMesh, bool separateTwoFacedTriangles, bool mirrorAxis = true)
+        {
+            _wldMesh = wldMesh;
+            _separateTwoFacedTriangles = separateTwoFacedTriangles;
+            _triangleSetComparer = new TriangleVertexSetComparer();
+            _uniqueTriangles = new HashSet<DataTypes.Polygon>(_triangleSetComparer);
+            _wldVertexIndexToDuplicatedVertexNormals = new Dictionary<int, Vector3>();
+            _transformMatrix = mirrorAxis ? Matrix4x4.CreateReflection(new Plane(1, 0, 0, 0)) : Matrix4x4.Identity;
+        }
+
+        public DataTypes.Polygon GetTriangle(int triangleIndex)
+        {
+            return _wldMesh.Indices[triangleIndex];
+        }
+
+        public (Vector3 v0, Vector3 v1, Vector3 v2) GetVertexPositions(DataTypes.Polygon triangle, bool swapYandZ = true)
+        {
+            (Vector3 v0, Vector3 v1, Vector3 v2) vertexPositions = (
+            Vector3.Transform((_wldMesh.Vertices[triangle.Vertex1] + _wldMesh.Center).ToVector3(swapYandZ), _transformMatrix),
+            Vector3.Transform((_wldMesh.Vertices[triangle.Vertex2] + _wldMesh.Center).ToVector3(swapYandZ), _transformMatrix),
+            Vector3.Transform((_wldMesh.Vertices[triangle.Vertex3] + _wldMesh.Center).ToVector3(swapYandZ), _transformMatrix));
+
+            return vertexPositions;
+        }
+
+        public (Vector3 v0, Vector3 v1, Vector3 v2) GetVertexNormals(DataTypes.Polygon triangle)
+        {
+            if (_separateTwoFacedTriangles)
+            {
+                if (!_uniqueTriangles.Contains(triangle, _triangleSetComparer))
+                {
+                    _uniqueTriangles.Add(triangle);
+                }
+                else
+                {
+                    return GetDuplicateVertexNormalsForTriangle(triangle);
+                }
+            }
+            (Vector3 v0, Vector3 v1, Vector3 v2) vertexNormals = (
+                Vector3.Transform(Vector3.Normalize(_wldMesh.Normals[triangle.Vertex1].ToVector3(true)), _transformMatrix),
+                Vector3.Transform(Vector3.Normalize(_wldMesh.Normals[triangle.Vertex2].ToVector3(true)), _transformMatrix),
+                Vector3.Transform(Vector3.Normalize(_wldMesh.Normals[triangle.Vertex3].ToVector3(true)), _transformMatrix));
+
+            return vertexNormals;
+        }
+
+        public (Vector2 v0, Vector2 v1, Vector2 v2) GetVertexUvs(DataTypes.Polygon triangle)
+        {
+            (Vector2 v0, Vector2 v1, Vector2 v2) vertexUvs = (
+                _wldMesh.TextureUvCoordinates[triangle.Vertex1].ToVector2(true),
+                _wldMesh.TextureUvCoordinates[triangle.Vertex2].ToVector2(true),
+                _wldMesh.TextureUvCoordinates[triangle.Vertex3].ToVector2(true));
+
+            return vertexUvs;
+        }
+
+        public (int v0, int v1, int v2) GetBoneIndexes(DataTypes.Polygon triangle, bool isSkinned, bool usesMobPieces, int singularBoneIndex)
+        {
+            (int v0, int v1, int v2) boneIndexes = (singularBoneIndex, singularBoneIndex, singularBoneIndex);
+            if (isSkinned && (usesMobPieces || singularBoneIndex == -1))
+            {
+                var boneOffset = singularBoneIndex == -1 ? 0 : singularBoneIndex;
+                boneIndexes = (
+                    GetBoneIndexForVertex(triangle.Vertex1) + boneOffset,
+                    GetBoneIndexForVertex(triangle.Vertex2) + boneOffset,
+                    GetBoneIndexForVertex(triangle.Vertex3) + boneOffset);
+            }
+
+            return boneIndexes;
+        }
+
+        public (Vector4? v0, Vector4? v1, Vector4? v2) GetVertexColorVectors(DataTypes.Polygon triangle, bool canExportVertexColors, ObjInstance objectInstance = null)
+        {
+            if (!canExportVertexColors) return (null, null, null);
+
+            var objInstanceColors = objectInstance?.Colors?.Colors ?? new List<WldColor>();
+            var meshColors = _wldMesh?.Colors ?? new List<WldColor>();
+
+            var v0Color = CoalesceVertexColor(meshColors, objInstanceColors, triangle.Vertex1);
+            var v1Color = CoalesceVertexColor(meshColors, objInstanceColors, triangle.Vertex2);
+            var v2Color = CoalesceVertexColor(meshColors, objInstanceColors, triangle.Vertex3);
 
             return (v0Color, v1Color, v2Color);
+        }
+
+        public void Reset()
+        {
+            _uniqueTriangles.Clear();
+            _wldVertexIndexToDuplicatedVertexNormals.Clear();
+        }
+
+        private (Vector3 v0, Vector3 v1, Vector3 v2) GetDuplicateVertexNormalsForTriangle(DataTypes.Polygon triangle)
+        {
+            if (!_wldVertexIndexToDuplicatedVertexNormals.TryGetValue(triangle.Vertex1, out var v0Normal))
+            {
+                v0Normal = Vector3.Normalize(-_wldMesh.Normals[triangle.Vertex1].ToVector3(true));
+            }
+            if (!_wldVertexIndexToDuplicatedVertexNormals.TryGetValue(triangle.Vertex2, out var v1Normal))
+            {
+                v1Normal = Vector3.Normalize(-_wldMesh.Normals[triangle.Vertex2].ToVector3(true));
+            }
+            if (!_wldVertexIndexToDuplicatedVertexNormals.TryGetValue(triangle.Vertex3, out var v2Normal))
+            {
+                v2Normal = Vector3.Normalize(-_wldMesh.Normals[triangle.Vertex3].ToVector3(true));
+            }
+
+            return (v0Normal, v1Normal, v2Normal);
+        }
+
+        private int GetBoneIndexForVertex(int vertexIndex)
+        {
+            foreach (var indexedMobVertexPiece in _wldMesh.MobPieces)
+            {
+                if (vertexIndex >= indexedMobVertexPiece.Value.Start &&
+                    vertexIndex < indexedMobVertexPiece.Value.Start + indexedMobVertexPiece.Value.Count)
+                {
+                    return indexedMobVertexPiece.Key;
+                }
+            }
+            return 0;
         }
 
         private Vector4 CoalesceVertexColor(List<WldColor> meshColors, List<WldColor> objInstanceColors, int vertexIndex)
@@ -653,139 +1551,67 @@ namespace LanternExtractor.EQ.Wld.Exporters
                 return DefaultVertexColor;
             }
         }
+    }
 
-        private void AddAnimatedMeshMorphTargets(Mesh mesh, IMeshBuilder<MaterialBuilder> gltfMesh,
-            string meshName, Matrix4x4 transformMatrix, Dictionary<VertexPositionNormal, int> gltfVertexPositionToWldVertexIndex)
+    public class TriangleVertexSetComparer : IEqualityComparer<DataTypes.Polygon>
+    {
+        public bool Equals(DataTypes.Polygon polyX, DataTypes.Polygon polyY)
         {
-            var frameTimes = new List<float>();
-            var weights = new List<float>();
-            var frameDelay = mesh.AnimatedVerticesReference.MeshAnimatedVertices.Delay/1000f;
+            var polyXSet = new HashSet<int>() { polyX.Vertex1, polyX.Vertex2, polyX.Vertex3 };
+            var polyYSet = new HashSet<int>() { polyY.Vertex1, polyY.Vertex2, polyY.Vertex3 };
 
-            for (var frame = 0; frame < mesh.AnimatedVerticesReference.MeshAnimatedVertices.Frames.Count; frame++)
-            {
-                var vertexPositionsForFrame = mesh.AnimatedVerticesReference.MeshAnimatedVertices.Frames[frame];
-                var morphTarget = gltfMesh.UseMorphTarget(frame);
-
-                foreach (var vertexGeometry in gltfVertexPositionToWldVertexIndex.Keys)
-                {
-                    var wldVertexPositionForFrame = vertexPositionsForFrame[gltfVertexPositionToWldVertexIndex[vertexGeometry]];
-                    var newPosition = (wldVertexPositionForFrame + mesh.Center).ToVector3(true);
-                    vertexGeometry.TryGetNormal(out var originalNormal);
-                    morphTarget.SetVertex(vertexGeometry, new VertexPositionNormal(newPosition, originalNormal));
-                }
-                frameTimes.Add(frame * frameDelay);
-                weights.Add(1);
-            }
-
-            var node = new NodeBuilder(meshName);
-            node.LocalTransform =  transformMatrix;
-
-            var instance = _scene.AddRigidMesh(gltfMesh, node);
-            instance.Content.UseMorphing().SetValue(weights.ToArray());
-            var track = instance.Content.UseMorphing("Default");
-            var morphTargetElements = new float[frameTimes.Count];
-
-            for (var i = 0; i < frameTimes.Count; i++)
-            {
-                Array.Clear(morphTargetElements, 0, morphTargetElements.Length);
-                morphTargetElements[i] = 1;
-                track.SetPoint(frameTimes[i], true, morphTargetElements);
-            }
-        }
-        private List<NodeBuilder> AddNewSkeleton(SkeletonHierarchy skeleton)
-        {
-            var skeletonNodes = new List<NodeBuilder>();
-            var duplicateNameDictionary = new Dictionary<string, int>();
-            foreach (var bone in skeleton.Skeleton)
-            {
-                var boneName = bone.CleanedName;
-                if (duplicateNameDictionary.TryGetValue(boneName, out var count))
-                {
-                    skeletonNodes.Add(new NodeBuilder($"{boneName}_{count:00}"));
-                    duplicateNameDictionary[boneName] = ++count;
-                }
-                else
-                {
-                    skeletonNodes.Add(new NodeBuilder(boneName));
-                    duplicateNameDictionary.Add(boneName, 0);
-                }
-            }
-            for (var i = 0; i < skeletonNodes.Count; i++)
-            {
-                var node = skeletonNodes[i];
-                var bone = skeleton.Skeleton[i];
-                bone.Children.ForEach(b => node.AddNode(skeletonNodes[b]));
-            }
-            _skeletons.Add(skeleton.ModelBase, skeletonNodes);
-            return skeletonNodes;
+            return polyXSet.SetEquals(polyYSet);
         }
 
-        private void ApplyBoneTransformation(NodeBuilder boneNode, DataTypes.BoneTransform boneTransform, 
-            string animationKey, int timeMs, bool staticPose)
+        public int GetHashCode(DataTypes.Polygon poly)
         {
-            var scaleVector = new Vector3(boneTransform.Scale);
-            var rotationQuaternion = new Quaternion()
-            {
-                X = (float)(boneTransform.Rotation.x * Math.PI)/180,
-                Y = (float)(boneTransform.Rotation.z * Math.PI)/180,
-                Z = (float)(boneTransform.Rotation.y * Math.PI * -1)/180,
-                W = (float)(boneTransform.Rotation.w * Math.PI)/180
-            };
-            rotationQuaternion = Quaternion.Normalize(rotationQuaternion);
-            var translationVector = boneTransform.Translation.ToVector3(true);
-            translationVector.Z = -translationVector.Z;
+            var polyVertList1 = new List<int>() { poly.Vertex1, poly.Vertex2, poly.Vertex3 };
+            polyVertList1.Sort();
 
-            if (staticPose)
+            unchecked
             {
-                boneNode
-                    .WithLocalScale(scaleVector)
-                    .WithLocalRotation(rotationQuaternion)
-                    .WithLocalTranslation(translationVector);
+                return 391 + polyVertList1.GetHashCode();
+            }
+        }
+    }
+
+    public struct UniqueLight
+    {
+        public float Radius { get; private set; }
+        public Vector3 Color { get; private set; }
+        public UniqueLight(LightInstance lightInstance)
+        {
+            Radius = lightInstance.Radius;
+            var color = lightInstance.LightReference?.LightSource?.Color;
+            if (color != null)
+            {
+                Color = new Vector3(color.Value.r, color.Value.g, color.Value.b);
             }
             else
             {
-                boneNode
-                    .UseScale(animationKey)
-                    .WithPoint(timeMs/1000f, scaleVector);
-                boneNode
-                    .UseRotation(animationKey)
-                    .WithPoint(timeMs/1000f, rotationQuaternion);
-                boneNode
-                    .UseTranslation(animationKey)
-                    .WithPoint(timeMs/1000f, translationVector);
+                Color = new Vector3(1, 1, 1);
             }
         }
+    }
 
-        private int GetBoneIndexForVertex(Mesh mesh, int vertexIndex)
-        {
-            foreach (var indexedMobVertexPiece in mesh.MobPieces)
-            {
-                if (vertexIndex >= indexedMobVertexPiece.Value.Start &&
-                    vertexIndex < indexedMobVertexPiece.Value.Start + indexedMobVertexPiece.Value.Count)
-                {
-                    return indexedMobVertexPiece.Key;
-                }
-            }
-            return 0;
-        }
-
-        private string FixFilePath(string filePath)
-        {
-            var fixedExtension = _exportFormat == GltfExportFormat.GlTF ? ".gltf" : ".glb";
-            return Path.ChangeExtension(filePath, fixedExtension);
-        }
+    public interface ICharacterModel
+    {
+        bool TryGetMaterialVariation(string imageName, out int variationIndex, out Color? color);
+        bool ShouldSkipMeshGenerationForMaterial(string materialName);
     }
 
     static class ImageAlphaConverter
     {
         public static string AddAlphaToImage(string filePath, ShaderType shaderType)
         {
-            var suffix = $"_{MaterialList.GetMaterialPrefix(shaderType).TrimEnd('_')}";
-            var newFileName = $"{Path.GetFileNameWithoutExtension(filePath)}{suffix}{Path.GetExtension(filePath)}";
+            // var suffix = $"_{MaterialList.GetMaterialPrefix(shaderType).TrimEnd('_')}";
+            var prefix = MaterialList.GetMaterialPrefix(shaderType);
+            // var newFileName = $"{Path.GetFileNameWithoutExtension(filePath)}{suffix}{Path.GetExtension(filePath)}";
+            var newFileName = $"{prefix}{Path.GetFileNameWithoutExtension(filePath)}{Path.GetExtension(filePath)}";
             var newFilePath = Path.Combine(Path.GetDirectoryName(filePath), newFileName);
 
             if (File.Exists(newFilePath)) return newFilePath;
-
+            if (!File.Exists(filePath)) return string.Empty;
             using (var originalImage = new Bitmap(filePath))
             using (var newImage = originalImage.Clone(
                 new Rectangle(0, 0, originalImage.Width, originalImage.Height),
@@ -806,6 +1632,7 @@ namespace LanternExtractor.EQ.Wld.Exporters
                                 newImage.SetPixel(i, j, Color.FromArgb(128, pixelColor));
                                 break;
                             case ShaderType.Transparent75:
+                            case ShaderType.TransparentAdditive:
                                 newImage.SetPixel(i, j, Color.FromArgb(192, pixelColor));
                                 break;
                             default:
@@ -847,6 +1674,11 @@ namespace LanternExtractor.EQ.Wld.Exporters
         public static Vector4 ToVector4(this WldColor color)
         {
             return new Vector4(color.R, color.G, color.B, color.A);
+        }
+
+        public static Vector4 ToVector4(this Color color)
+        {
+            return new Vector4(color.R / 255.0f, color.G / 255.0f, color.B / 255.0f, color.A / 255.0f);
         }
     }
 

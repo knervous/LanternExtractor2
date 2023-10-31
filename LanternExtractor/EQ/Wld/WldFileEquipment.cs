@@ -3,13 +3,14 @@ using LanternExtractor.EQ.Wld.Exporters;
 using LanternExtractor.EQ.Wld.Fragments;
 using LanternExtractor.EQ.Wld.Helpers;
 using LanternExtractor.Infrastructure.Logger;
+using System.Collections.Generic;
 
 namespace LanternExtractor.EQ.Wld
 {
     public class WldFileEquipment : WldFile
     {
         public WldFileEquipment(PfsFile wldFile, string zoneName, WldType type, ILogger logger, Settings settings,
-            WldFile wldToInject = null) : base(wldFile, zoneName, type, logger, settings, wldToInject)
+            List<WldFile> wldFilesToInject = null) : base(wldFile, zoneName, type, logger, settings, wldFilesToInject)
         {
         }
 
@@ -93,7 +94,7 @@ namespace LanternExtractor.EQ.Wld
                     string boneName = string.Empty;
                     if (skeleton.IsValidSkeleton(FragmentNameCleaner.CleanName(track), out boneName))
                     {
-                        _logger.LogError($"Assigning {track.Name} to {skeleton.Name}");
+                        _logger.LogInfo($"Assigning {track.Name} to {skeleton.Name}");
                         track.IsProcessed = true;
                         skeleton.AddTrackDataEquipment(track, boneName.ToLower());
                     }

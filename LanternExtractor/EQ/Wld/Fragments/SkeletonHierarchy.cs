@@ -236,11 +236,21 @@ namespace LanternExtractor.EQ.Wld.Fragments
                 Animations["pos"] = new Animation();
             }
 
+            if (pieceName.StartsWith("SSNSSNBO_L"))
+            {
+                pieceName = FixSsnPosBoneName(pieceName);
+            }
+
             Animations["pos"].AddTrack(track, pieceName, Animation.CleanBoneName(pieceName),
                 Animation.CleanBoneAndStripBase(pieceName, ModelBase));
             track.TrackDefFragment.IsAssigned = true;
             track.IsProcessed = true;
             track.IsPoseAnimation = true;
+        }
+
+        private string FixSsnPosBoneName(string pieceName)
+        {
+            return pieceName.Substring(3);
         }
 
         public void AddTrackDataEquipment(TrackFragment track, string boneName, bool isDefault = false)
@@ -462,44 +472,42 @@ namespace LanternExtractor.EQ.Wld.Fragments
             boneName = string.Empty;
             return false;
         }
-
-        public mat4 GetBoneMatrix(int boneIndex, string animName, int frame)
+        public mat4 GetBoneMatrix(int boneIndex, Dictionary<string, TrackFragment> animationTracks, int frame)
         {
-            if (!Animations.ContainsKey(animName))
-            {
-                return mat4.Identity;
-            }
-
-            if (frame < 0 || frame >= Animations[animName].FrameCount)
+            return GetBoneMatrix(boneIndex, animationTracks, frame, vec3.Zero);
+        }
+        public mat4 GetBoneMatrix(int boneIndex, Dictionary<string, TrackFragment> animationTracks, int frame, vec3 centerCorrectionVector)
+        {
+            if (frame < 0)
             {
                 return mat4.Identity;
             }
 
             var currentBone = Skeleton[boneIndex];
-            
-            mat4 boneMatrix = mat4.Identity;
+
+            mat4 boneMatrix = mat4.Translate(centerCorrectionVector).Inverse * mat4.Identity;
 
             while (currentBone != null)
             {
-                if (!Animations[animName].TracksCleanedStripped.ContainsKey(currentBone.CleanedName))
+                if (!animationTracks.ContainsKey(currentBone.CleanedName))
                 {
                     break;
                 }
-                
-                var track = Animations[animName].TracksCleanedStripped[currentBone.CleanedName].TrackDefFragment;
+
+                var track = animationTracks[currentBone.CleanedName].TrackDefFragment;
                 int realFrame = frame >= track.Frames.Count ? 0 : frame;
                 currentBone = Skeleton[boneIndex].Parent;
-                
+
                 float scaleValue = track.Frames[realFrame].Scale;
                 var scaleMat = mat4.Scale(scaleValue, scaleValue, scaleValue);
-        
-                var rotationMatrix = new mat4(track.Frames[realFrame].Rotation);
-        
+
+                var rotationMatrix = new mat4(track.Frames[realFrame].Rotation.Normalized);
+
                 var translation = track.Frames[realFrame].Translation;
                 var translateMat = mat4.Translate(translation);
 
                 var modelMatrix = translateMat * rotationMatrix * scaleMat;
-
+             
                 boneMatrix = modelMatrix * boneMatrix;
 
                 if (currentBone != null)
@@ -507,8 +515,8 @@ namespace LanternExtractor.EQ.Wld.Fragments
                     boneIndex = currentBone.Index;
                 }
             }
-
-            return boneMatrix;
+            
+            return mat4.Translate(centerCorrectionVector) * boneMatrix;
         }
 
         public void RenameNodeBase(string newBase)

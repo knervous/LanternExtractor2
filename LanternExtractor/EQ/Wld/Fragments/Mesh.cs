@@ -180,7 +180,7 @@ namespace LanternExtractor.EQ.Wld.Fragments
                 int r = colorBytes[2];
                 int a = colorBytes[3];
 
-                Colors.Add(new Color( r, g, b, a));
+                Colors.Add(new Color(r, g, b, a));
             }
 
             Indices = new List<Polygon>();

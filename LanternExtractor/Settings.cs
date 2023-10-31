@@ -1,5 +1,8 @@
 using System;
 using System.IO;
+using System.Linq;
+using System.Collections.Generic;
+using System.Runtime;
 using LanternExtractor.Infrastructure;
 using LanternExtractor.Infrastructure.Logger;
 
@@ -44,8 +47,12 @@ namespace LanternExtractor
         /// <summary>
         /// Sets the desired model export format
         /// </summary>
-        public ModelExportFormat ModelExportFormat { get; private set; }
-        
+        /// Allowing public set so it can be overidden after parsing command-line arguments
+        public ModelExportFormat ModelExportFormat { get; set; }
+
+        /// <summary>
+        /// Sets the desired model export format
+        /// </summary>
         public bool ExportCharactersToSingleFolder { get; private set; }
         
         public bool ExportEquipmentToSingleFolder { get; private set; }
@@ -58,17 +65,39 @@ namespace LanternExtractor
         public bool ExportAllAnimationFrames { get; private set; }
 
         /// <summary>
-        /// Exports all OBJ frames for all animations
+        /// Exports zone with object instances placed within
         /// </summary>
         public bool ExportZoneWithObjects { get; private set; }
 
         /// <summary>
-        /// Export vertex colors with glTF model. Default behavior of glTF renderers
-        /// is to mix the vertex color with the base color, which will not look right.
-        /// Only turn this on if you intend to do some post-processing that
-        /// requires vertex colors being present.
+        /// Exports zone with door instances placed within
         /// </summary>
-        public bool ExportGltfVertexColors { get; private set; }
+        public bool ExportZoneWithDoors { get; private set; }
+
+        /// <summary>
+        /// Exports zone with all character variants that can spawn in it
+        /// </summary>
+        public bool ExportZoneCharacterVariations { get; private set; }
+
+		/// <summary>
+		/// Exports zone glTF with light instances with intensity set to the
+        /// provided value. If set at 0, lights are not exported
+		/// </summary>
+		public float LightIntensityMultiplier { get; private set; }
+        public bool ExportZoneWithLights => LightIntensityMultiplier > 0;
+
+		/// <summary>
+		/// Exports zone with objects with skeletal animations included
+		/// </summary>
+		public bool ExportZoneObjectsWithSkeletalAnimations { get; private set; }
+
+		/// <summary>
+		/// Export vertex colors with glTF model. Default behavior of glTF renderers
+		/// is to mix the vertex color with the base color, which will not look right.
+		/// Only turn this on if you intend to do some post-processing that
+		/// requires vertex colors being present.
+		/// </summary>
+		public bool ExportGltfVertexColors { get; private set; }
 
         /// <summary>
         /// Exports glTF models in .GLB file format. GLB packages the .glTF json, the
@@ -77,6 +106,11 @@ namespace LanternExtractor
         /// more portable.
         /// </summary>
         public bool ExportGltfInGlbFormat { get; private set; }
+
+		/// <summary>
+		/// Generate duplicate sets of vertices for triangles sharing vertices with another
+		/// </summary>
+		public bool SeparateTwoFacedTriangles { get; private set; }
 
         /// <summary>
         /// Additional files that should be copied when extracting with `all` or `clientdata`
@@ -87,6 +121,16 @@ namespace LanternExtractor
         /// If enabled, XMI files will be copied to the 'Exports/Music' folder
         /// </summary>
         public bool CopyMusic { get; private set; }
+
+        /// <summary>
+        /// Animation types to include in the export
+        /// </summary>
+        public List<string> ExportedAnimationTypes { get; private set; }
+
+        /// <summary>
+        /// Path to the server database
+        /// </summary>
+        public string ServerDbPath { get; private set; }
 
         /// <summary>
         /// The verbosity of the logger
@@ -161,11 +205,32 @@ namespace LanternExtractor
                 ExportZoneWithObjects = Convert.ToBoolean(setting2);
             }
 
-            if (parsedSettings.TryGetValue("ModelExportFormat", out var parsedSetting2))
+            if (parsedSettings.ContainsKey("ExportZoneWithDoors"))
             {
-                var exportFormatSetting = (ModelExportFormat)Convert.ToInt32(parsedSetting2);
+                ExportZoneWithDoors = Convert.ToBoolean(parsedSettings["ExportZoneWithDoors"]);
+            }
+
+			if (parsedSettings.ContainsKey("ExportZoneCharacterVariations"))
+			{
+				ExportZoneCharacterVariations = Convert.ToBoolean(parsedSettings["ExportZoneCharacterVariations"]);
+			}
+
+			if (parsedSettings.ContainsKey("LightIntensityMultiplier"))
+			{
+				LightIntensityMultiplier = Convert.ToSingle(parsedSettings["LightIntensityMultiplier"]);
+			}
+
+			if (parsedSettings.ContainsKey("ExportZoneObjectsWithSkeletalAnimations"))
+			{
+				ExportZoneObjectsWithSkeletalAnimations = Convert.ToBoolean(parsedSettings["ExportZoneObjectsWithSkeletalAnimations"]);
+			}
+
+            if (parsedSettings.ContainsKey("ModelExportFormat"))
+            {
+                var exportFormatSetting = (ModelExportFormat)Convert.ToInt32(parsedSettings["ModelExportFormat"]);
                 ModelExportFormat = exportFormatSetting;
             }
+
 
             if (parsedSettings.TryGetValue("ExportCharacterToSingleFolder", out var setting3))
             {
@@ -202,20 +267,40 @@ namespace LanternExtractor
                 ClientDataToCopy = setting6;
             }
             
-            if (parsedSettings.TryGetValue("ClientDataToCopy", out var parsedSetting6))
+			if (parsedSettings.ContainsKey("SeparateTwoFacedTriangles"))
+			{
+				SeparateTwoFacedTriangles = Convert.ToBoolean(parsedSettings["SeparateTwoFacedTriangles"]);
+			}
+
+			if (parsedSettings.ContainsKey("ExportedAnimationTypes"))
             {
-                ClientDataToCopy = parsedSetting6;
+                var animationIncludeString = parsedSettings["ExportedAnimationTypes"].Trim();
+				ExportedAnimationTypes = animationIncludeString
+                    .Split(',').Select(a => a.Trim().ToLower())
+                    .Where(a => a.Length == 1).ToList();
             }
-            
+			
             if (parsedSettings.TryGetValue("CopyMusic", out var setting7))
             {
                 CopyMusic = Convert.ToBoolean(setting7);
             }
 
-            if (parsedSettings.TryGetValue("LoggerVerbosity", out var parsedSetting7))
+            if (parsedSettings.ContainsKey("ServerDatabasePath"))
             {
-                LoggerVerbosity = Convert.ToInt32(parsedSetting7);
+                ServerDbPath = parsedSettings["ServerDatabasePath"];
+            }
+
+            if (parsedSettings.ContainsKey("LoggerVerbosity"))
+            {
+                LoggerVerbosity = Convert.ToInt32(parsedSettings["LoggerVerbosity"]);
             }
         }
+
+        public bool UsingCombinedGlobalChr()
+		{
+            return ModelExportFormat != ModelExportFormat.Intermediate &&
+				(ExportAllAnimationFrames || ExportZoneCharacterVariations)
+                && !RawS3dExtract;
+		}
     }
 }

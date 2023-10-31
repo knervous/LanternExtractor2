@@ -56,7 +56,7 @@ namespace LanternExtractor.EQ.Wld.Exporters
             if (settings.ExportZoneWithObjects)
             {
                 var path = wldFile.BasePath;
-                var s3dArchive = wldFile.BaseS3DArchive;
+                var s3dArchive = wldFile.S3dArchiveReference;
                 var wldFileToInject = wldFile.WldFileToInject;
                 var rootFolder = wldFile.RootFolder;
                 var shortName = wldFile.ShortName;
@@ -80,7 +80,9 @@ namespace LanternExtractor.EQ.Wld.Exporters
                     string wldFileName = objArchive + LanternStrings.WldFormatExtension;
                     var objWldFile = new WldFileZone(s3dObjArchive.GetFile(wldFileName), shortName, WldType.Objects, logger, settings);
                     objWldFile.Initialize(rootFolder, false);
-                    ArchiveExtractor.WriteWldTextures(s3dObjArchive, objWldFile, rootFolder + shortName + "/Zone/Textures/", logger);
+                    s3dObjArchive.FilenameChanges = objWldFile.FilenameChanges;
+                    objWldFile.S3dArchiveReference = s3dObjArchive;
+                    ArchiveExtractor.WriteWldTextures(objWldFile, rootFolder + shortName + "/Zone/Textures/", logger);
                     meshes.AddRange(objWldFile.GetFragmentsOfType<Mesh>());
                     materialLists.AddRange(objWldFile.GetFragmentsOfType<MaterialList>());
                 }
@@ -167,8 +169,19 @@ namespace LanternExtractor.EQ.Wld.Exporters
 
             if (settings.ExportAllAnimationFrames)
             {
+				if (wldFile.ZoneShortname != "global")
+				{
+					GlobalReference.CharacterWld.AddAdditionalAnimationsToSkeleton(skeleton);
+				}
+				
                 foreach (var animation in skeleton.Animations)
                 {
+                    var animationKeyPrefix = animation.Key.Substring(0, 1).ToLower();
+                    if ( animation.Key != "pos" &&
+                        !settings.ExportedAnimationTypes.Contains(animationKeyPrefix))
+                    {
+                        continue;
+                    }
                     for (int i = 0; i < animation.Value.FrameCount; ++i)
                     {
                         WriteAnimationFrame(skeleton, animation.Key, i, settings, wldFile);

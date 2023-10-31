@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "LanternExtractor": {
+      "commandName": "Project",
+      "commandLineArgs": "cazicthule"
+    }
+  }
+}
