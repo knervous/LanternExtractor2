@@ -1,4 +1,4 @@
-# LanternExtractor (vermadas fork)
+# LanternExtractor (knervous fork)
 EverQuest Trilogy Client file extractor that exports game data into formats usable in modern game engines. 
 
 This project is part of the [LanternEQ Project](https://www.lanterneq.com) which aims to reverse engineer and re-implement classic EverQuest in the Unity Engine.
